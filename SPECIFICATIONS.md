@@ -35,16 +35,36 @@ Le système cible Linux permet de transmettre le périphérique vidéo au conten
 
 ```mermaid
 flowchart LR
-    C[Capteurs] --> E[ESP8266]
-    E <-->|MQTTS| M[Mosquitto]
-    M <-->|MQTTS| B[FastAPI + Isolation Forest]
-    B --> P[(PostgreSQL)]
-    U[Navigateur React] <-->|HTTPS / WSS| W[Nginx]
-    W <--> B
-    CAM[Webcam USB] --> V[Service vision YOLO]
-    V -->|Événements par API interne| B
-    W -->|Flux MJPEG interne| V
-    E --> A[OLED / LEDs / buzzer]
+    subgraph EXT[Composants externes au PC]
+        S[Capteurs<br/>DHT22 · MQ-2 · PIR] --> E[ESP8266]
+        E --> A[OLED · LEDs · buzzer]
+        CAM[Webcam USB]
+    end
+
+    subgraph PC[PC portable — serveur local]
+        subgraph DOCKER[Docker Compose]
+            M[Mosquitto<br/>broker MQTT]
+            B[FastAPI<br/>API + WebSocket + Isolation Forest]
+            P[(PostgreSQL)]
+            V[Service vision<br/>YOLO26-n]
+            W[Nginx + React<br/>dashboard]
+        end
+        U[Navigateur de supervision<br/>(hors Docker)]
+    end
+
+    E <-->|Wi-Fi local · MQTTS| M
+    M <-->|MQTTS| B
+    B --> P
+    B <-->|WebSocket / REST| W
+    V -->|Événements de présence| B
+    CAM -->|USB| V
+    W <-->|HTTPS / WSS| U
+    V -->|Flux vidéo relayé| W
+
+    classDef external fill:#fff3cd,stroke:#b8860b,color:#222
+    classDef pc fill:#dbeafe,stroke:#2563eb,color:#222
+    class S,E,A,CAM,U external
+    class M,B,P,V,W pc
 ```
 
 Le portable fournit un point d'accès Wi-Fi local en 2,4 GHz, protégé par WPA2 et un mot de passe propre à l'équipe. L'ESP8266 et les postes de consultation rejoignent ce réseau. L'ESP8266 fonctionne en client Wi-Fi ; il ne sert pas le dashboard.
