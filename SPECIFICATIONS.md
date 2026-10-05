@@ -35,37 +35,47 @@ Le système cible Linux permet de transmettre le périphérique vidéo au conten
 
 ```mermaid
 flowchart LR
-    subgraph EXT[Composants externes au PC]
-        S[Capteurs<br/>DHT22 · MQ-2 · PIR] --> E[ESP8266]
-        E --> A[OLED · LEDs · buzzer]
-        CAM[Webcam USB]
+    subgraph BOITIER["EXTERNE — Boîtier SENTINEL-X"]
+        C["Capteurs : DHT22, MQ-2, PIR"] -->|Câblage| E["ESP8266 — firmware C++"]
+        E -->|Câblage| A["OLED, LEDs, buzzer"]
     end
 
-    subgraph PC[PC portable — serveur local]
-        subgraph DOCKER[Docker Compose]
-            M[Mosquitto<br/>broker MQTT]
-            B[FastAPI<br/>API + WebSocket + Isolation Forest]
-            P[(PostgreSQL)]
-            V[Service vision<br/>YOLO26-n]
-            W[Nginx + React<br/>dashboard]
+    CAM["EXTERNE — Webcam USB"]
+    U["EXTERNE — Autre PC ou téléphone<br/>Navigateur exécutant React"]
+
+    subgraph PC["NOTRE PC PORTABLE — Serveur Linux"]
+        WIFI["Point d'accès Wi-Fi local"]
+        LOCAL["Navigateur local exécutant React"]
+
+        subgraph DOCKER["Docker Compose — 5 conteneurs"]
+            M["mosquitto<br/>Broker MQTT"]
+            B["backend<br/>FastAPI + WebSocket + Isolation Forest"]
+            P[("postgres<br/>PostgreSQL")]
+            W["web<br/>Nginx + fichiers React"]
+            V["vision<br/>OpenCV + YOLO26-n"]
+
+            M <-->|MQTTS| B
+            B <-->|Lecture et écriture| P
+            W <-->|API et WebSocket internes| B
+            V -->|Événements par API interne| B
+            V -->|Flux MJPEG interne| W
         end
-        U[Navigateur de supervision<br/>(hors Docker)]
+
+        WIFI <-->|Port 8883 — MQTTS| M
+        WIFI <-->|Port 443 — HTTPS / WSS| W
+        LOCAL <-->|HTTPS / WSS| W
     end
 
-    E <-->|Wi-Fi local · MQTTS| M
-    M <-->|MQTTS| B
-    B --> P
-    B <-->|WebSocket / REST| W
-    V -->|Événements de présence| B
-    CAM -->|USB| V
-    W <-->|HTTPS / WSS| U
-    V -->|Flux vidéo relayé| W
+    E <-->|Wi-Fi local — MQTTS| WIFI
+    U <-->|Wi-Fi local — HTTPS / WSS| WIFI
+    CAM -->|USB transmis au conteneur| V
 
-    classDef external fill:#fff3cd,stroke:#b8860b,color:#222
-    classDef pc fill:#dbeafe,stroke:#2563eb,color:#222
-    class S,E,A,CAM,U external
-    class M,B,P,V,W pc
+    style PC fill:#eaf3ff,stroke:#2563eb,stroke-width:2px
+    style DOCKER fill:#f8fafc,stroke:#64748b
+    style BOITIER fill:#fff7ed,stroke:#ea580c,stroke-width:2px
 ```
+
+Le bloc bleu contient ce qui tourne sur notre PC ; le bloc Docker détaille les cinq services. Le boîtier et la webcam sont des composants physiques externes. Le dashboard peut être ouvert sur le PC serveur ou sur un autre appareil du réseau : React s'exécute dans le navigateur, tandis que Nginx en distribue les fichiers. Le point d'accès Wi-Fi est une fonction de l'hôte, hors Docker. Ce schéma représente le déploiement Linux retenu ; la variante Windows du service vision est décrite plus haut.
 
 Le portable fournit un point d'accès Wi-Fi local en 2,4 GHz, protégé par WPA2 et un mot de passe propre à l'équipe. L'ESP8266 et les postes de consultation rejoignent ce réseau. L'ESP8266 fonctionne en client Wi-Fi ; il ne sert pas le dashboard.
 
