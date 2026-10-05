@@ -1,0 +1,272 @@
+# SENTINEL-X — Spécification fonctionnelle et technique
+
+Version 1.0 — 5 octobre 2026
+
+## 1. Objet et portée
+
+Réaliser un prototype local de surveillance industrielle : un ESP8266 collecte des mesures environnementales et pilote des alertes physiques ; un ordinateur portable analyse ces mesures et une webcam USB ; un dashboard permet de consulter les événements et de commander les actionneurs.
+
+Cette spécification fixe les choix de réalisation issus des échanges de l'équipe. Le sujet EPSI (`sujet.pdf`, pages 2 à 8) reste la référence pédagogique. Les valeurs de configuration et critères de recette ci-dessous sont des choix du projet, sauf mention explicite du sujet. Ce document décrit le système à construire, pas un système déjà réalisé ou validé.
+
+Le périmètre est un boîtier, une webcam, un serveur et quelques navigateurs locaux. Le prototype fonctionne sans Internet une fois les dépendances, images Docker et modèles téléchargés. Le Wi-Fi constitue le réseau local ; il n'implique pas une connexion Internet.
+
+## 2. Choix techniques arrêtés
+
+| Élément | Choix |
+|---|---|
+| Serveur | Ordinateur portable, architecture matérielle B du sujet |
+| Système cible | Linux natif, Docker Engine et Docker Compose |
+| Firmware | C++ avec PlatformIO, framework Arduino pour ESP8266 |
+| Transport IoT | MQTT sur TLS, broker Eclipse Mosquitto |
+| Backend | Python, FastAPI, validation Pydantic, un seul processus applicatif |
+| Temps réel navigateur | WebSocket sécurisé intégré à FastAPI |
+| Frontend | React, TypeScript, Vite ; graphiques Recharts |
+| Publication web | Nginx servant React et relayant API, WebSocket et vidéo via HTTPS |
+| Stockage | PostgreSQL ; accès réservé au backend |
+| Vision | Python, OpenCV et YOLO26-n préentraîné (`yolo26n.pt`), classe `person` uniquement |
+| Anomalies | scikit-learn Isolation Forest, intégré au backend |
+| Déploiement | Cinq conteneurs : `web`, `backend`, `postgres`, `mosquitto`, `vision` |
+
+PostgreSQL est conservé pour son service dédié et sa persistance dans Compose. SQLite aurait aussi suffi à ce volume avec une seule API : la séparation des services ne rend pas PostgreSQL indispensable. Ni le navigateur ni le service vision n'accèdent directement à la base.
+
+Le système cible Linux permet de transmettre le périphérique vidéo au conteneur vision. La disponibilité de Linux et la compatibilité de la carte Wi-Fi doivent être vérifiées sur le portable retenu avant implémentation. Si seul Windows est disponible, la variante de repli exécute le même service vision sur l'hôte, avec l'API inchangée ; cette exception à « tout en conteneurs » doit être documentée.
+
+## 3. Architecture et réseau
+
+```mermaid
+flowchart LR
+    C[Capteurs] --> E[ESP8266]
+    E <-->|MQTTS| M[Mosquitto]
+    M <-->|MQTTS| B[FastAPI + Isolation Forest]
+    B --> P[(PostgreSQL)]
+    U[Navigateur React] <-->|HTTPS / WSS| W[Nginx]
+    W <--> B
+    CAM[Webcam USB] --> V[Service vision YOLO]
+    V -->|Événements par API interne| B
+    W -->|Flux MJPEG interne| V
+    E --> A[OLED / LEDs / buzzer]
+```
+
+Le portable fournit un point d'accès Wi-Fi local en 2,4 GHz, protégé par WPA2 et un mot de passe propre à l'équipe. L'ESP8266 et les postes de consultation rejoignent ce réseau. L'ESP8266 fonctionne en client Wi-Fi ; il ne sert pas le dashboard.
+
+Plan proposé : serveur `192.168.50.1/24`, clients par DHCP. Cette plage sera remplacée si elle entre en conflit avec le réseau du campus. Un petit point d'accès dédié peut remplacer le hotspot si la carte du portable ne le supporte pas ; le reste de l'architecture reste identique.
+
+Le navigateur ouvre `https://192.168.50.1`. Le certificat web contient cette adresse IP dans ses SAN. Une autorité locale de confiance est installée sur les postes de démonstration. Aucun nom DNS public, CDN ou service cloud n'est requis.
+
+| Port de l'hôte | Usage | Exposition |
+|---|---|---|
+| TCP 443 | Dashboard, API, WebSocket, vidéo | Réseau local de l'équipe |
+| TCP 8883 | MQTT chiffré | Réseau local de l'équipe |
+| TCP 22 | Administration SSH, si nécessaire | Poste d'administration autorisé uniquement |
+
+PostgreSQL, FastAPI et le serveur vidéo ne publient aucun port sur l'hôte dans le déploiement Linux. Les conteneurs utilisent leurs noms de services sur les réseaux Docker. Les flux internes HTTP restent confinés à ces réseaux ; les flux Wi-Fi applicatifs sont chiffrés. Le rapport explicite ces terminaisons TLS plutôt que d'affirmer un chiffrement de chaque liaison interne.
+
+## 4. Matériel et acquisition
+
+Matériel prévu : un ESP8266, DHT22, MQ-2, PIR HC-SR501, OLED I2C, LEDs de statut, buzzer, webcam USB et éléments de câblage. Le boîtier est modélisé sous Fusion 360, imprimé en 3D et identifié par gravure selon le sujet.
+
+Le câblage final dépend du modèle exact de carte ESP8266 et des modules fournis. Vérifier les tensions d'alimentation, niveaux logiques, plage admissible de l'entrée analogique et broches de démarrage avant branchement. Le montage inclut résistances et adaptation de niveau si nécessaires. Le MQ-2 ne doit pas être relié à l'entrée analogique sans cette vérification.
+
+| Acquisition | Fréquence retenue | Unité / interprétation |
+|---|---|---|
+| Température et humidité | Toutes les 2 secondes, à confirmer avec la fiche du module | °C et % d'humidité relative |
+| MQ-2 | Toutes les secondes après stabilisation | Valeur ADC brute ; aucune conversion en ppm non étalonnée |
+| PIR | Lecture fréquente non bloquante ; synthèse chaque seconde | Mouvement détecté, pas preuve d'une personne immobile |
+| Télémétrie globale | Un message par seconde | Dernières mesures disponibles, avec âge et validité |
+
+Le MQ-2 expose un état `warming_up` pendant sa stabilisation définie après vérification du module. Les mesures invalides sont `null`, jamais remplacées par zéro. Le DHT22 conserve sa dernière mesure entre deux lectures ; son âge est affichable et elle devient périmée après 6 secondes sans nouvelle lecture valide.
+
+L'OLED affiche l'identifiant, la connexion et l'état général. Les LEDs indiquent : vert = prêt, orange clignotant = connexion ou fonctionnement dégradé, rouge = alerte. Une LED ne prétend pas identifier seule quel service distant est en panne.
+
+## 5. MQTT, format des données et pertes de messages
+
+MQTT transporte des messages nommés par « topics ». Mosquitto est le broker : il distribue les messages aux clients abonnés. Le backend et l'ESP8266 échangent dans les deux sens sans créer de serveur HTTP sur le microcontrôleur.
+
+Préfixe unique : `sentinel/sentinel-x-01/`.
+
+| Suffixe du topic | Émetteur | Usage |
+|---|---|---|
+| `telemetry` | ESP8266 | Mesures, non retenues |
+| `status` | ESP8266 | État connecté / déconnecté, retenu, avec Last Will |
+| `commands` | Backend | Commandes, jamais retenues |
+| `acks` | ESP8266 | Résultat d'une commande, non retenu |
+| `receipts` | Backend | Confirmation de stockage d'une mesure, non retenue |
+
+Les topics utilisent QoS 1 ; son support en émission et réception avec TLS est un critère de choix de la bibliothèque ESP. QoS 1 autorise les doublons et ne prouve pas le stockage en base. Un accusé applicatif de stockage assure cette dernière fonction.
+
+Format de télémétrie :
+
+```json
+{
+  "device_id": "sentinel-x-01",
+  "boot_id": "7db21a09",
+  "sequence": 42,
+  "uptime_ms": 42000,
+  "timestamp": null,
+  "temperature": 24.5,
+  "humidity": 48.2,
+  "gas": 130,
+  "presence": false,
+  "sensor_age_ms": {"dht22": 1000, "mq2": 0, "pir": 0},
+  "sensor_status": {"dht22": "ok", "mq2": "ok", "pir": "ok"},
+  "source": "physical"
+}
+```
+
+Les champs initiaux sont conservés et complétés pour gérer les pertes et doublons. `timestamp` contient l'heure UTC de capture si elle est connue, sinon `null`. Le serveur ajoute `received_at`. Le firmware mesure les intervalles avec son horloge monotone ; aucune heure UTC fictive n'est produite. L'identité unique d'une mesure est `(device_id, boot_id, sequence)`.
+
+Le firmware conserve un tampon RAM circulaire de 60 mesures compactes, dimensionné et vérifié avec la mémoire restante sous TLS. Il retire une mesure après réception de son accusé de stockage. Le backend confirme les doublons déjà stockés sans les réinsérer. Un accusé signifie « transaction validée », pas seulement « paquet reçu ».
+
+En cas de coupure, l'ESP poursuit ses acquisitions et tente une reconnexion avec temporisation progressive plafonnée à 10 secondes. Au retour, il transmet le tampon à débit limité, en donnant la priorité aux mesures nouvelles. Un débordement abandonne les plus anciennes mesures et incrémente un compteur de pertes visible. Le tampon ne survit pas à une coupure électrique : aucune conservation illimitée n'est promise.
+
+Les mesures rejouées alimentent l'historique avec un indicateur de reprise. Si l'heure de capture n'est pas reconstructible à partir du même démarrage, elle reste inconnue. Elles ne déclenchent pas une alerte actuelle et ne remplacent pas les valeurs en direct.
+
+## 6. Commandes et fonctionnement des alertes
+
+Le dashboard commande le buzzer et une indication LED de test via l'API. Le backend attribue un `command_id`, publie vers MQTT et attend l'accusé de l'ESP.
+
+```json
+{
+  "command_id": "c9b4d5c0-15fb-4a72-8bd2-201a987fa089",
+  "target_boot_id": "7db21a09",
+  "expires_at_uptime_ms": 47000,
+  "type": "buzzer",
+  "value": true,
+  "duration_ms": 3000
+}
+```
+
+L'API accepte la commande avec HTTP 202 ; l'interface affiche `pending`, puis `executed`, `rejected` ou `timeout`. Un accusé contient le même identifiant, le résultat et, si nécessaire, une raison. Les commandes sont des mises à l'état explicites, jamais des bascules ambiguës.
+
+Le backend refuse une commande si l'appareil est hors ligne. Il estime l'échéance à partir du dernier `uptime_ms` reçu. L'ESP rejette un autre `boot_id` ou une échéance dépassée et garde les 20 derniers résultats pour répondre aux doublons sans refaire l'action. Après 5 secondes sans réponse, le backend indique `timeout` : l'exécution réelle est inconnue, pas nécessairement échouée. Aucun rejeu automatique d'une ancienne commande après reconnexion.
+
+La LED système conserve la priorité sur les tests manuels. Une intrusion visuelle confirmée ou une anomalie environnementale persistante ouvre un événement et demande un signal sonore de 3 secondes, limité à un déclenchement par type toutes les 30 secondes. L'acquittement marque la prise en compte humaine ; la résolution signifie que la condition a disparu. Ces états sont distincts.
+
+Les seuils physiques éventuels sont des protections complémentaires, séparées du modèle d'anomalies. Ils ne remplacent pas l'analyse temporelle exigée par le sujet.
+
+## 7. Backend, API et stockage
+
+FastAPI réunit validation, client MQTT, API REST, WebSocket et inférence Isolation Forest. Il utilise un seul worker pour éviter plusieurs consommateurs MQTT et plusieurs gestionnaires d'alertes. L'inférence et les opérations bloquantes sont exécutées sans bloquer la boucle asynchrone.
+
+Pydantic valide les types, bornes physiques documentées, taille maximale et identifiants. La validité d'une mesure et son caractère inhabituel sont deux traitements distincts. Le backend ne fait pas confiance au champ `device_id` seul : les droits MQTT et le topic identifient la source autorisée.
+
+| Interface | Fonction |
+|---|---|
+| `POST /api/v1/login`, `POST /api/v1/logout` | Session opérateur |
+| `GET /api/v1/status` | État des composants et fraîcheur des données |
+| `GET /api/v1/measurements?seconds=60` | Dernière minute ; filtres temporels et pagination pour l'historique |
+| `GET /api/v1/alerts` | Historique et alertes actives, paginés |
+| `POST /api/v1/alerts` | Ingestion authentifiée des événements externes, notamment vision |
+| `POST /api/v1/alerts/{id}/ack` | Acquittement opérateur |
+| `POST /api/v1/commands` | Commande physique |
+| `GET /api/v1/commands/{id}` | Résultat d'une commande |
+| `GET /api/v1/video` | Flux MJPEG authentifié, relayé par Nginx vers vision |
+| `WSS /api/v1/ws` | Mesures, états, alertes et résultats de commande |
+| `GET /health/live`, `GET /health/ready` | Contrôles internes du processus et de sa disponibilité |
+
+Les événements externes portent un `event_id` unique pour permettre des réessais sans doublons. Le service vision dispose aussi d'un point d'entrée interne de heartbeat ; il ne crée pas une nouvelle alerte à chaque image.
+
+Tables minimales : `measurements`, `alerts`, `commands`, `device_status`. Les anomalies, détections et erreurs partagent la table `alerts` avec un type, une gravité, des dates, une source et un contenu JSON validé. Les mesures indexent appareil et date ; la clé d'identité garantit la déduplication.
+
+Conservation : toutes les mesures, décisions d'anomalie valides et transitions utiles pendant le workshop. Aucun enregistrement vidéo continu, aucune image stockée par défaut. Les logs techniques font l'objet d'une rotation distincte ; « tout conserver » ne signifie pas enregistrer chaque image ou des logs illimités. PostgreSQL utilise un volume persistant et un export est effectué avant le rendu.
+
+## 8. Vision locale
+
+Un seul service accède à la webcam USB. Il capture les images, applique YOLO26-n et expose le flux annoté MJPEG. L'API reçoit les événements de présence ; elle ne transporte pas les images via WebSocket.
+
+Paramètres initiaux : capture 640 × 480, analyse des images les plus récentes sans file d'attente croissante, modèle `yolo26n.pt`, CPU par défaut, seuil de détection 0,60. Une personne est confirmée après trois analyses positives consécutives ; l'événement est résolu après 3 secondes sans confirmation. Ces réglages sont mesurés et ajustés sur le portable réel.
+
+Le système affiche « personne détectée ». En mode surveillance, toute personne confirmée est considérée comme une intrusion dans la zone de démonstration. Il n'effectue ni reconnaissance d'identité ni analyse d'intention. Le PIR fournit un indice de mouvement complémentaire ; il ne conditionne pas la détection visuelle.
+
+Le sujet demande moins de 100 ms de traitement par trame. Cette exigence doit être mesurée sur les trames analysées, en indiquant matériel, résolution, latence médiane et p95. Le débit initial visé est 5 images analysées par seconde, mais cela ne prouve pas le respect des 100 ms. Si le temps de traitement est excessif, réduire la taille d'entrée, mesurer de nouveau et signaler tout écart restant au coach.
+
+Le modèle est téléchargé avant l'essai hors ligne. Les images périmées ne sont pas présentées comme du direct. Si la webcam disparaît, le dashboard indique la panne et l'acquisition des capteurs continue.
+
+## 9. Détection d'anomalies environnementales
+
+Isolation Forest remplace Random Forest. Il recherche des combinaisons inhabituelles ; il ne prédit pas une date de panne et ne diagnostique pas automatiquement une fuite de gaz.
+
+Une observation est calculée toutes les 2 secondes sur une fenêtre glissante de 30 secondes : dernières valeurs valides de température, humidité et gaz, variations de température et gaz, moyenne et dispersion du gaz. Le PIR reste hors du premier modèle pour ne pas confondre une visite normale avec une anomalie environnementale. Les mesures périmées, de chauffe ou rejouées ne participent pas à l'inférence en direct.
+
+Le modèle initial utilise 100 arbres et une graine aléatoire fixée. Il est entraîné hors ligne sur des séquences normales représentatives ; un objectif de collecte de 20 minutes est fixé, sans prétendre que cela garantit la qualité. Une séquence normale distincte sert à fixer le seuil, puis des séquences de test distinctes servent à mesurer fausses alertes et détections. La séparation se fait par séquences temporelles, pas par tirage aléatoire de fenêtres voisines.
+
+L'indicateur affiché est `anomaly_score = -score_samples(X)` : une valeur plus élevée est plus inhabituelle. Le seuil du projet est réglé sur la validation ; une alerte exige trois observations successives au-delà du seuil, puis dix observations normales pour être résolue. Ce score n'est ni une probabilité ni un pourcentage de confiance. [Référence scikit-learn](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html).
+
+Si la fenêtre n'est pas suffisamment remplie, si un capteur requis est invalide ou si le modèle est absent, afficher `initializing` ou `unavailable`, jamais « normal ». Le modèle figé et ses paramètres sont versionnés comme artefacts ; aucun réentraînement automatique pendant la démonstration.
+
+Un simulateur Python rejoue des séquences normales et des dérives progressives sous un identifiant `simulator-01`. Les données portent `source: simulated`, utilisent des droits dédiés et apparaissent avec un bandeau « SIMULATION ». Elles sont séparées des mesures physiques, ne pilotent pas les actionneurs réels et ne constituent pas une preuve de performance sur de vrais incidents. Les tests physiques restent nécessaires ; la simulation complète ces tests.
+
+## 10. Dashboard
+
+Une page React rassemble : état général, connexion ESP, état des capteurs, broker, base, webcam et modèle ; valeurs courantes avec unités et fraîcheur ; graphiques des 60 dernières secondes ; mouvement PIR ; flux vidéo annoté ; score d'anomalie et seuil ; alertes ; commandes buzzer et LED de test.
+
+Le dashboard récupère un instantané par REST à l'ouverture, puis applique les événements WebSocket. Après reconnexion il recharge la dernière minute et les alertes pour combler les événements manqués. Les courbes montrent les interruptions de données plutôt que d'inventer des valeurs ; une température réémise n'est pas présentée comme une nouvelle acquisition.
+
+Un bandeau rouge explicite signale une panne bloquante : « ESP8266 déconnecté — dernière mesure reçue il y a 12 s ». Une pastille ou un code seul ne suffit pas. L'interface distingue `normal`, `warning`, `critical`, `offline` et `initializing`, avec un libellé en plus de la couleur.
+
+Si le backend disparaît, le navigateur détecte lui-même l'absence de heartbeat WebSocket en 5 secondes ; il n'attend pas un message d'erreur provenant du serveur arrêté. Les commandes sont désactivées tant que leur exécution n'est pas possible.
+
+## 11. Sécurité minimale prévue
+
+Mosquitto refuse les connexions anonymes, utilise TLS et un identifiant secret propre à l'ESP. Les ACL limitent chaque client à ses topics. Le backend possède ses propres droits. TLS ne se limite pas au chiffrement : l'ESP doit vérifier l'identité du broker. [Configuration Mosquitto](https://mosquitto.org/man/mosquitto-conf-5.html).
+
+Pour éviter une dépendance à une horloge Internet, le firmware utilise la validation par clé publique connue du broker proposée par BearSSL. La clé publique est embarquée ; la clé privée reste côté serveur. Une rotation de cette clé impose une mise à jour du firmware. `setInsecure()` est interdit dans la configuration de démonstration. [BearSSL ESP8266](https://arduino-esp8266.readthedocs.io/en/3.1.0/esp8266wifi/bearssl-client-secure-class.html).
+
+Un compte opérateur local suffit. Son mot de passe est haché ; la session utilise un cookie `Secure`, `HttpOnly`, `SameSite=Strict`, et expire après 8 heures. API de commande, WebSocket et vidéo exigent cette session. Les requêtes modifiant l'état vérifient aussi un jeton CSRF et l'origine. Le service vision utilise un secret distinct limité à l'ingestion et au heartbeat. Aucun JWT ou système multi-rôles n'est nécessaire au premier prototype.
+
+Les secrets sont injectés depuis des fichiers locaux exclus de Git ; seul un exemple sans valeurs sensibles est livré. Les certificats publics ne sont pas des secrets. Le pare-feu et les publications Docker sont contrôlés depuis un autre poste : ne pas supposer qu'une règle UFW suffit à filtrer un port publié Docker.
+
+Les services tournent avec des privilèges réduits ; aucun montage du socket Docker ni mode `privileged`. Vision reçoit seulement le périphérique vidéo requis. SSH, s'il est activé, utilise des clés. Les audits portent uniquement sur les cibles et fenêtres autorisées par les encadrants ; le réseau du campus hors périmètre n'est pas une cible.
+
+## 12. Pannes, reprise et supervision
+
+| Situation | Détection et comportement |
+|---|---|
+| ESP silencieux | Hors ligne après 5 secondes sans télémétrie récente ; Last Will en complément |
+| Réseau coupé | Tampon ESP, LED orange, commandes indisponibles, reconnexion automatique |
+| Capteur en erreur | Valeur invalide et erreur nominative ; autres capteurs actifs |
+| PostgreSQL arrêté | Pas d'accusé de stockage, pas de commande acceptée nécessitant persistance ; affichage dégradé si le backend reste joignable |
+| Broker arrêté | État MQTT en erreur ; le client backend et l'ESP tentent de se reconnecter |
+| Vision arrêtée | Heartbeat absent depuis 5 secondes ; télémétrie maintenue |
+| Backend arrêté | Bandeau navigateur, aucune commande ; l'ESP continue son tampon |
+| Redémarrage du portable | Relance du hotspot, moteur Docker et services ; données PostgreSQL conservées |
+
+Les codes stables sont `E001` appareil hors ligne, `E002` capteur invalide, `E003` MQTT indisponible, `E004` webcam indisponible, `E005` vision indisponible, `E006` base indisponible, `E007` modèle indisponible, `E008` commande sans confirmation, `E009` perte de mesures. Chaque erreur précise sa source et son texte ; une transition d'état crée un événement plutôt qu'un événement identique par seconde.
+
+Compose prévoit `restart: unless-stopped`, des healthchecks et des dépendances prêtes au lancement. Les clients implémentent aussi leurs propres réessais : l'ordre initial ne garantit pas la disponibilité future. Un conteneur `unhealthy` n'est pas automatiquement redémarré par cette seule politique ; les erreurs fatales doivent provoquer une sortie ou une récupération explicite. [Démarrage Compose](https://docs.docker.com/compose/how-tos/startup-order/).
+
+Sur Linux, le moteur Docker et le hotspot sont configurés pour démarrer avec l'hôte, la veille du portable est désactivée pendant la démonstration. Un redémarrage complet est testé. Les journaux Docker sont bornés, par exemple trois fichiers de 10 Mo par service.
+
+## 13. Recette : preuves attendues
+
+Les critères suivants doivent être testés sur la machine finale ; ils ne sont pas encore vérifiés.
+
+1. Après préparation, couper l'accès Internet : dashboard, capteurs, vision, anomalies et commandes restent utilisables sur le Wi-Fi local.
+2. Observer un message de télémétrie par seconde et des graphiques de 60 secondes ; une mesure valide apparaît en moins de 2 secondes après sa réception au serveur.
+3. Commander buzzer et LED : état `pending`, accusé reçu puis résultat visible ; un doublon ne répète pas l'action.
+4. Couper le Wi-Fi pendant 20 secondes : erreur affichée en 5 secondes, tampon rejoué au retour, aucune duplication PostgreSQL, aucun incident ancien présenté comme actuel.
+5. Couper le Wi-Fi au-delà de la capacité du tampon : pertes explicitement comptées. Redémarrer l'ESP : nouveau `boot_id`, aucune ancienne commande appliquée.
+6. Débrancher un capteur : erreur et valeur invalide visibles sans arrêt des autres mesures.
+7. Présenter une personne puis quitter le champ : rectangle, événement confirmé et résolution ; relever les latences de vision et leur conformité à l'exigence du sujet.
+8. Rejouer des séquences réservées aux tests : observer le score Isolation Forest, les fausses alertes et les anomalies ; source simulée clairement affichée.
+9. Arrêter successivement vision, broker, backend et base : état dégradé observable et reprise vérifiée, sans annoncer un succès de stockage ou de commande non confirmé.
+10. Redémarrer le portable : services et hotspot disponibles sans relance manuelle ; historique conservé.
+11. Tester avec un client non authentifié : refus MQTT et commandes web. Avec une clé broker incorrecte : refus par l'ESP. Capturer le trafic : mesures et commandes applicatives illisibles sur le Wi-Fi.
+12. Vérifier les ports réellement exposés depuis un autre poste et l'absence de secrets dans l'archive de code.
+
+## 14. Livrables et limites
+
+Le prototype inclut un boîtier accessible pour maintenance, OLED visible, circulation d'air pour les capteurs et câblage propre. Livrables numériques jeudi soir, à l'heure des encadrants, dans `Workshop2026-M1-G<n>` : dossier PDF avec schémas réseau et électronique, sécurité, IA, audit et poster A3 ; présentation PPTX ; vidéo MP4 H.264 verticale 9:16 de 60 secondes maximum ; archive de code et README reproductible. Le boîtier fonctionnel est remis vendredi matin selon les modalités du campus.
+
+La vidéo utilise le fond vert, choix retenu pour respecter la formulation la plus exigeante du sujet. La soutenance locale suit son déroulé détaillé : 1 minute d'introduction, 1 minute de vidéo, 3 minutes de démonstration, puis 5 minutes de présentation et questions. Le sujet présente quelques formulations divergentes ; les adaptations locales des encadrants priment.
+
+La solution ne comprend pas de cloud, reconnaissance faciale, application mobile, Kubernetes, stockage vidéo continu, apprentissage automatique permanent ou diagnostic industriel certifié. Les scénarios simulés restent identifiables. L'objectif de recette est un système intégré, observable, reproductible et capable de reprendre après les pannes prévues.
+
+## 15. Références
+
+- Sujet EPSI fourni : `sujet.pdf`, notamment pages 2 à 8, source des obligations pédagogiques.
+- [SQLite : domaines d'utilisation](https://www.sqlite.org/whentouse.html), pour distinguer capacité réelle et préférence architecturale.
+- [Ultralytics YOLO26](https://docs.ultralytics.com/models/yolo26), modèle nano de détection retenu (`yolo26n.pt`).
+- Références Mosquitto, BearSSL, scikit-learn et Docker citées dans les sections correspondantes, consultées le 5 octobre 2026.
+
+Les versions de dépendances, images Docker et poids de modèle seront figées dans les fichiers de verrouillage et le manifeste de déploiement lors de l'implémentation. La présente spécification n'invente pas de versions ni de performances déjà testées.
