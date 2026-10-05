@@ -1,7 +1,7 @@
 import cv2
 from ultralytics import YOLO
 
-model = YOLO("model/yolo26n.pt")
+model = YOLO("vision/model/yolo26n.pt")
 camera = cv2.VideoCapture(0)
 
 while True:
@@ -23,7 +23,7 @@ while True:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(
                     frame,
-                    "Personne detectee",
+                    "Intrus detectee",
                     (x1, y1 - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
