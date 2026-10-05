@@ -15,7 +15,7 @@ Le périmètre est un boîtier, une webcam, un serveur et quelques navigateurs l
 | Élément | Choix |
 |---|---|
 | Serveur | Ordinateur portable, architecture matérielle B du sujet |
-| Système cible | Linux natif, Docker Engine et Docker Compose |
+| Système cible | PC portable Windows, Docker Desktop et Docker Compose |
 | Firmware | C++ avec PlatformIO, framework Arduino pour ESP8266 |
 | Transport IoT | MQTT sur TLS, broker Eclipse Mosquitto |
 | Backend | Python, FastAPI, validation Pydantic, un seul processus applicatif |
@@ -25,11 +25,11 @@ Le périmètre est un boîtier, une webcam, un serveur et quelques navigateurs l
 | Stockage | PostgreSQL ; accès réservé au backend |
 | Vision | Python, OpenCV et YOLO26-n préentraîné (`yolo26n.pt`), classe `person` uniquement |
 | Anomalies | scikit-learn Isolation Forest, intégré au backend |
-| Déploiement | Cinq conteneurs : `web`, `backend`, `postgres`, `mosquitto`, `vision` |
+| Déploiement | Quatre conteneurs : `web`, `backend`, `postgres`, `mosquitto` ; service `vision` sur Windows |
 
 PostgreSQL est conservé pour son service dédié et sa persistance dans Compose. SQLite aurait aussi suffi à ce volume avec une seule API : la séparation des services ne rend pas PostgreSQL indispensable. Ni le navigateur ni le service vision n'accèdent directement à la base.
 
-Le système cible Linux permet de transmettre le périphérique vidéo au conteneur vision. La disponibilité de Linux et la compatibilité de la carte Wi-Fi doivent être vérifiées sur le portable retenu avant implémentation. Si seul Windows est disponible, la variante de repli exécute le même service vision sur l'hôte, avec l'API inchangée ; cette exception à « tout en conteneurs » doit être documentée.
+Le serveur est le PC portable Windows de l'équipe. La variante prévue pour Windows devient l'architecture retenue : le service vision s'exécute directement sur Windows pour accéder à la webcam USB, et les quatre autres services restent dans Docker Desktop. Les interfaces applicatives restent identiques. La disponibilité du point d'accès Wi-Fi local et les échanges entre Windows et les conteneurs seront vérifiés sur ce portable.
 
 ## 3. Architecture et réseau
 
@@ -43,24 +43,24 @@ flowchart LR
     CAM["EXTERNE — Webcam USB"]
     U["EXTERNE — Autre PC ou téléphone<br/>Navigateur exécutant React"]
 
-    subgraph PC["NOTRE PC PORTABLE — Serveur Linux"]
+    subgraph PC["NOTRE PC PORTABLE — Windows"]
         WIFI["Point d'accès Wi-Fi local"]
         LOCAL["Navigateur local exécutant React"]
+        V["Service Python sur Windows<br/>OpenCV + YOLO26-n"]
 
-        subgraph DOCKER["Docker Compose — 5 conteneurs"]
+        subgraph DOCKER["Docker Desktop / Compose — 4 conteneurs"]
             M["mosquitto<br/>Broker MQTT"]
             B["backend<br/>FastAPI + WebSocket + Isolation Forest"]
             P[("postgres<br/>PostgreSQL")]
             W["web<br/>Nginx + fichiers React"]
-            V["vision<br/>OpenCV + YOLO26-n"]
 
             M <-->|MQTTS| B
             B <-->|Lecture et écriture| P
             W <-->|API et WebSocket internes| B
-            V -->|Événements par API interne| B
-            V -->|Flux MJPEG interne| W
         end
 
+        V -->|Événements via API HTTPS| W
+        V -->|Flux MJPEG local| W
         WIFI <-->|Port 8883 — MQTTS| M
         WIFI <-->|Port 443 — HTTPS / WSS| W
         LOCAL <-->|HTTPS / WSS| W
@@ -68,14 +68,14 @@ flowchart LR
 
     E <-->|Wi-Fi local — MQTTS| WIFI
     U <-->|Wi-Fi local — HTTPS / WSS| WIFI
-    CAM -->|USB transmis au conteneur| V
+    CAM -->|USB — accès direct sous Windows| V
 
     style PC fill:#eaf3ff,stroke:#2563eb,stroke-width:2px
     style DOCKER fill:#f8fafc,stroke:#64748b
     style BOITIER fill:#fff7ed,stroke:#ea580c,stroke-width:2px
 ```
 
-Le bloc bleu contient ce qui tourne sur notre PC ; le bloc Docker détaille les cinq services. Le boîtier et la webcam sont des composants physiques externes. Le dashboard peut être ouvert sur le PC serveur ou sur un autre appareil du réseau : React s'exécute dans le navigateur, tandis que Nginx en distribue les fichiers. Le point d'accès Wi-Fi est une fonction de l'hôte, hors Docker. Ce schéma représente le déploiement Linux retenu ; la variante Windows du service vision est décrite plus haut.
+Le bloc bleu contient ce qui tourne sur notre PC Windows : quatre services dans Docker Desktop, le service vision Python hors Docker, le point d'accès Wi-Fi et le navigateur local. Le boîtier et la webcam sont des composants physiques externes. Le dashboard peut être ouvert sur le PC serveur ou sur un autre appareil du réseau : React s'exécute dans le navigateur, tandis que Nginx en distribue les fichiers.
 
 Le portable fournit un point d'accès Wi-Fi local en 2,4 GHz, protégé par WPA2 et un mot de passe propre à l'équipe. L'ESP8266 et les postes de consultation rejoignent ce réseau. L'ESP8266 fonctionne en client Wi-Fi ; il ne sert pas le dashboard.
 
@@ -89,7 +89,7 @@ Le navigateur ouvre `https://192.168.50.1`. Le certificat web contient cette adr
 | TCP 8883 | MQTT chiffré | Réseau local de l'équipe |
 | TCP 22 | Administration SSH, si nécessaire | Poste d'administration autorisé uniquement |
 
-PostgreSQL, FastAPI et le serveur vidéo ne publient aucun port sur l'hôte dans le déploiement Linux. Les conteneurs utilisent leurs noms de services sur les réseaux Docker. Les flux internes HTTP restent confinés à ces réseaux ; les flux Wi-Fi applicatifs sont chiffrés. Le rapport explicite ces terminaisons TLS plutôt que d'affirmer un chiffrement de chaque liaison interne.
+PostgreSQL et FastAPI ne publient aucun port sur l'hôte. Les conteneurs utilisent leurs noms de services sur les réseaux Docker. Le service vision Windows transmet ses événements via l'API HTTPS publiée par Nginx. Nginx relaie le flux vidéo du service Windows ; cette liaison locale doit être accessible depuis Docker Desktop et bloquée pour les autres postes par le pare-feu Windows. Les flux Wi-Fi applicatifs sont chiffrés. Le rapport explicite ces terminaisons TLS plutôt que d'affirmer un chiffrement de chaque liaison interne.
 
 ## 4. Matériel et acquisition
 
@@ -244,9 +244,9 @@ Pour éviter une dépendance à une horloge Internet, le firmware utilise la val
 
 Un compte opérateur local suffit. Son mot de passe est haché ; la session utilise un cookie `Secure`, `HttpOnly`, `SameSite=Strict`, et expire après 8 heures. API de commande, WebSocket et vidéo exigent cette session. Les requêtes modifiant l'état vérifient aussi un jeton CSRF et l'origine. Le service vision utilise un secret distinct limité à l'ingestion et au heartbeat. Aucun JWT ou système multi-rôles n'est nécessaire au premier prototype.
 
-Les secrets sont injectés depuis des fichiers locaux exclus de Git ; seul un exemple sans valeurs sensibles est livré. Les certificats publics ne sont pas des secrets. Le pare-feu et les publications Docker sont contrôlés depuis un autre poste : ne pas supposer qu'une règle UFW suffit à filtrer un port publié Docker.
+Les secrets sont injectés depuis des fichiers locaux exclus de Git ; seul un exemple sans valeurs sensibles est livré. Les certificats publics ne sont pas des secrets. Le pare-feu Windows et les publications Docker sont contrôlés depuis un autre poste pour vérifier les accès réellement autorisés.
 
-Les services tournent avec des privilèges réduits ; aucun montage du socket Docker ni mode `privileged`. Vision reçoit seulement le périphérique vidéo requis. SSH, s'il est activé, utilise des clés. Les audits portent uniquement sur les cibles et fenêtres autorisées par les encadrants ; le réseau du campus hors périmètre n'est pas une cible.
+Les services tournent avec des privilèges réduits ; aucun montage du socket Docker ni mode `privileged`. Le service vision utilise les permissions caméra de Windows. SSH, s'il est activé, utilise des clés. Les audits portent uniquement sur les cibles et fenêtres autorisées par les encadrants ; le réseau du campus hors périmètre n'est pas une cible.
 
 ## 12. Pannes, reprise et supervision
 
@@ -265,7 +265,7 @@ Les codes stables sont `E001` appareil hors ligne, `E002` capteur invalide, `E00
 
 Compose prévoit `restart: unless-stopped`, des healthchecks et des dépendances prêtes au lancement. Les clients implémentent aussi leurs propres réessais : l'ordre initial ne garantit pas la disponibilité future. Un conteneur `unhealthy` n'est pas automatiquement redémarré par cette seule politique ; les erreurs fatales doivent provoquer une sortie ou une récupération explicite. [Démarrage Compose](https://docs.docker.com/compose/how-tos/startup-order/).
 
-Sur Linux, le moteur Docker et le hotspot sont configurés pour démarrer avec l'hôte, la veille du portable est désactivée pendant la démonstration. Un redémarrage complet est testé. Les journaux Docker sont bornés, par exemple trois fichiers de 10 Mo par service.
+Sur Windows, le démarrage de Docker Desktop, du service vision Python et du point d'accès Wi-Fi doit être configuré et vérifié, en précisant si l'ouverture de session est nécessaire. La politique de redémarrage Compose ne couvre pas le service vision exécuté sur Windows : sa relance doit être gérée séparément. La veille du portable est désactivée pendant la démonstration. Un redémarrage complet est testé. Les journaux Docker sont bornés, par exemple trois fichiers de 10 Mo par service.
 
 ## 13. Recette : preuves attendues
 
