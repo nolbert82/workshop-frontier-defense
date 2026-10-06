@@ -76,7 +76,6 @@ class Heartbeat(StrictModel):
     model: bool
     median_ms: float | None = Field(default=None, ge=0)
     p95_ms: float | None = Field(default=None, ge=0)
-    simulated: bool = False
     stream_id: str | None = Field(default=None, max_length=64)
 
 

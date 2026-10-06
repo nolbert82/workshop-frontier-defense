@@ -30,7 +30,7 @@ def test_vision_heartbeat_identifies_stream_restart(client):
     service = {"Authorization": "Bearer test-vision-secret"}
     for stream_id in ("first-stream", "restarted-stream"):
         response = client.post("/api/v1/vision/heartbeat", headers=service, json={
-            "camera": True, "model": True, "simulated": False, "stream_id": stream_id})
+            "camera": True, "model": True, "stream_id": stream_id})
         assert response.status_code == 200
         login(client)
         assert client.get("/api/v1/status").json()["vision"]["stream_id"] == stream_id

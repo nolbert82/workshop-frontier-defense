@@ -61,7 +61,7 @@ class Vision:
         self.jpeg = None
         self.jpeg_at = 0
         self.camera_ok = False
-        self.model_ok = args.simulate
+        self.model_ok = False
         self.latencies = deque(maxlen=300)
         self.events = deque()
         self.scenario = "normal"
@@ -73,36 +73,21 @@ class Vision:
         camera = None
         try:
             while not self.stop.is_set():
-                if self.args.simulate:
-                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                    frame[:] = (25, 36, 38)
-                    for x in range(0, 640, 40):
-                        cv2.line(frame, (x, 0), (x, 480), (38, 51, 52), 1)
-                    for y in range(0, 480, 40):
-                        cv2.line(frame, (0, y), (640, y), (38, 51, 52), 1)
-                    cv2.putText(frame, "SIMULATION - AUCUNE WEBCAM", (38, 52), cv2.FONT_HERSHEY_SIMPLEX, .7, (125, 207, 190), 2)
-                    cv2.putText(frame, "SENTINEL-X / ZONE 01", (38, 440), cv2.FONT_HERSHEY_SIMPLEX, .55, (115, 145, 140), 1)
-                    if self.scenario == "intrusion":
-                        cv2.circle(frame, (320, 160), 25, (151, 159, 163), -1)
-                        cv2.rectangle(frame, (288, 190), (352, 330), (151, 159, 163), -1)
-                    ok = True
-                    self.stop.wait(.1)
-                else:
-                    if camera is None:
-                        try:
-                            selected = camera_index(self.args.camera, self.args.camera_name)
-                        except (RuntimeError, ImportError):
-                            self.camera_ok = False
-                            log.warning("Webcam configurée indisponible", exc_info=True)
-                            self.stop.wait(2)
-                            continue
-                        camera = cv2.VideoCapture(selected, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
-                        camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                        camera.set(cv2.CAP_PROP_FPS, 30)
-                        camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    ok, frame = camera.read()
+                if camera is None:
+                    try:
+                        selected = camera_index(self.args.camera, self.args.camera_name)
+                    except (RuntimeError, ImportError):
+                        self.camera_ok = False
+                        log.warning("Webcam configurée indisponible", exc_info=True)
+                        self.stop.wait(2)
+                        continue
+                    camera = cv2.VideoCapture(selected, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
+                    camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    camera.set(cv2.CAP_PROP_FPS, 30)
+                    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                ok, frame = camera.read()
                 self.camera_ok = bool(ok)
                 if not ok:
                     if camera:
@@ -121,15 +106,14 @@ class Vision:
 
     def analyze(self):
         model = None
-        if not self.args.simulate:
-            try:
-                from ultralytics import YOLO
-                if not Path(self.args.model).is_file():
-                    raise FileNotFoundError("Poids YOLO absents ; aucun téléchargement automatique")
-                model = YOLO(self.args.model)
-                self.model_ok = True
-            except Exception:
-                log.exception("Modèle YOLO indisponible")
+        try:
+            from ultralytics import YOLO
+            if not Path(self.args.model).is_file():
+                raise FileNotFoundError("Poids YOLO absents ; aucun téléchargement automatique")
+            model = YOLO(self.args.model)
+            self.model_ok = True
+        except Exception:
+            log.exception("Modèle YOLO indisponible")
         previous = -1
         while not self.stop.is_set():
             started = time.monotonic()
@@ -141,12 +125,7 @@ class Vision:
                 frame = cv2.resize(latest[0], (640, 480))
                 detected = False
                 try:
-                    if self.args.simulate:
-                        detected = self.scenario == "intrusion"
-                        if detected:
-                            cv2.rectangle(frame, (270, 115), (370, 350), (115, 222, 173), 2)
-                            cv2.putText(frame, "Personne fictive", (270, 100), cv2.FONT_HERSHEY_SIMPLEX, .5, (115, 222, 173), 1)
-                    elif model:
+                    if model:
                         results = model.predict(frame, classes=[0], conf=.60, imgsz=self.args.imgsz, device="cpu", verbose=False)
                         for result in results:
                             for box in result.boxes:
@@ -156,7 +135,7 @@ class Vision:
                                 detected = True
                     transition = self.tracker.update(detected, time.monotonic())
                     if transition and self.model_ok:
-                        transition.update(type="intrusion", source="simulated" if self.args.simulate else "vision")
+                        transition.update(type="intrusion", source="vision")
                         with self.lock:
                             self.events.append(transition)
                     ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -180,15 +159,11 @@ class Vision:
                     latencies = list(self.latencies)
                     with self.lock:
                         fresh = bool(self.jpeg and time.monotonic()-self.jpeg_at < 2)
-                    heartbeat = {"camera": self.camera_ok and fresh, "model": self.model_ok, "simulated": self.args.simulate,
+                    heartbeat = {"camera": self.camera_ok and fresh, "model": self.model_ok,
                         "stream_id": self.stream_id,
                         "median_ms": statistics.median(latencies) if latencies else None,
                         "p95_ms": float(np.percentile(latencies, 95)) if latencies else None}
                     client.post(self.args.url+"/api/v1/vision/heartbeat", json=heartbeat).raise_for_status()
-                    if self.args.simulate:
-                        response = client.get(self.args.url+"/api/v1/vision/simulation")
-                        if response.is_success:
-                            self.scenario = response.json()["scenario"]
                     with self.lock:
                         event = self.events[0] if self.events else None
                     if event:
@@ -209,7 +184,6 @@ class Vision:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--simulate", action="store_true")
     parser.add_argument("--camera", type=int, default=None)
     parser.add_argument("--camera-name", default=None)
     parser.add_argument("--camera-config", default="vision/camera.json")
@@ -266,7 +240,7 @@ def main():
 
     server = ThreadingHTTPServer((args.bind, args.port), Handler)
     vision.start()
-    print(f"Vision {'SIMULÉE' if args.simulate else args.camera_name or 'USB index '+str(args.camera)} : {args.bind}:{args.port}", flush=True)
+    print(f"Vision {args.camera_name or 'USB index '+str(args.camera)} : {args.bind}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

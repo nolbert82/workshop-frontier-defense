@@ -59,7 +59,7 @@ Le service utilise `Authorization: Bearer VISION_SECRET`. Droits limités à `PO
 {"event_id":"UUID-stable-pour-un-episode","type":"intrusion","state":"active","source":"vision","message":"Personne détectée dans la zone surveillée"}
 ```
 
-Pour résoudre : même identifiant et `state: resolved`. Les réessais sont idempotents, même après redémarrage du backend. Le heartbeat toutes les secondes indique `camera`, `model`, `median_ms`, `p95_ms`, `simulated`. MJPEG local : `/stream`, secret Bearer requis. FastAPI vérifie la session avant le relais, Nginx publie `/api/v1/video` en HTTPS.
+Pour résoudre : même identifiant et `state: resolved`. Les réessais sont idempotents, même après redémarrage du backend. Le heartbeat toutes les secondes indique `camera`, `model`, `median_ms`, `p95_ms` et `stream_id`. MJPEG local : `/stream`, secret Bearer requis. FastAPI vérifie la session avant le relais, Nginx publie `/api/v1/video` en HTTPS.
 
 ## Séparation des sources
 

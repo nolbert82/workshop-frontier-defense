@@ -30,7 +30,7 @@ class Runtime:
         self.boot = uuid.uuid4().hex[:12]
         self.sequence = 0
         self.vision_at = 0
-        self.vision = {"camera": False, "model": False, "simulated": False}
+        self.vision = {"camera": False, "model": False}
         self.actuators = {"buzzer": False, "led": False}
         self.expirations = {}
         self.cooldowns = {}
@@ -228,8 +228,7 @@ class Runtime:
                     if self.scenario != "offline":
                         await self.ingest(telemetry(self.sequence, self.boot, self.scenario, started-self.scenario_at), "simulator-01", "simulated")
                     async with self.lock:
-                        vision_simulated = self.vision.get("simulated") and self.vision.get("camera") and time.monotonic()-self.vision_at < 5
-                        await self.condition("simulation:intrusion", self.scenario == "intrusion" and not vision_simulated, "intrusion", "critical", None, "Personne fictive détectée dans la zone surveillée", "simulated")
+                        await self.condition("simulation:intrusion", self.scenario == "intrusion", "intrusion", "critical", None, "Présence fictive détectée dans la zone surveillée", "simulated")
                 async with self.lock:
                     if self.database_failed:
                         await self.condition("system:E006", True, "error", "critical", "E006", "Base précédemment indisponible ; connexion rétablie", "backend")
