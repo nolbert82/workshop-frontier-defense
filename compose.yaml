@@ -1,0 +1,94 @@
+name: sentinel-x
+x-logging: &logging
+  driver: json-file
+  options: {max-size: "10m", max-file: "3"}
+services:
+  postgres:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentinel
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Lancer scripts/setup.py puis utiliser --env-file secrets/compose.env}
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    networks: [storage]
+    logging: *logging
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U sentinel -d sentinel"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt: [no-new-privileges:true]
+  mosquitto:
+    image: eclipse-mosquitto:2.0.22
+    restart: unless-stopped
+    entrypoint: [/bin/sh, /mosquitto/entrypoint.sh]
+    ports: ["8883:8883"]
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+      - ./mosquitto/entrypoint.sh:/mosquitto/entrypoint.sh:ro
+      - ./secrets/mqtt-passwords.txt:/run/secrets/mqtt-passwords.txt:ro
+      - ./secrets/tls:/run/tls:ro
+      - mosquitto-data:/mosquitto/data
+    environment:
+      MQTT_HEALTH_PASSWORD: ${MQTT_HEALTH_PASSWORD:?Configuration absente}
+    networks: [app]
+    logging: *logging
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD-SHELL, 'mosquitto_sub -h mosquitto -p 8883 --cafile /run/tls/ca.crt -u health -P "$$MQTT_HEALTH_PASSWORD" -t sentinel/sentinel-x-01/status -W 2; code=$$?; test $$code -eq 0 -o $$code -eq 27']
+      interval: 10s
+      timeout: 4s
+      retries: 5
+  backend:
+    build: {context: ., dockerfile: backend/Dockerfile}
+    restart: unless-stopped
+    environment:
+      SENTINEL_CONFIG: /run/secrets/app.json
+      SENTINEL_DATABASE_URL: postgresql+psycopg://sentinel:${POSTGRES_PASSWORD}@postgres:5432/sentinel
+      SENTINEL_MQTT_HOST: mosquitto
+      SENTINEL_MQTT_CA: /run/tls/ca.crt
+      SENTINEL_VISION_URL: http://host.docker.internal:8090
+      SENTINEL_SECURE_COOKIES: "true"
+    volumes:
+      - ./secrets/app.json:/run/secrets/app.json:ro
+      - ./secrets/tls/ca.crt:/run/tls/ca.crt:ro
+    networks: [app, storage]
+    depends_on:
+      postgres: {condition: service_healthy}
+      mosquitto: {condition: service_healthy}
+    logging: *logging
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
+      interval: 10s
+      timeout: 4s
+      retries: 5
+  web:
+    build: {context: ., dockerfile: frontend/Dockerfile}
+    restart: unless-stopped
+    ports: ["443:8443"]
+    volumes: ["./secrets/tls/server.crt:/run/tls/server.crt:ro", "./secrets/tls/server.key:/run/tls/server.key:ro"]
+    networks: [app]
+    depends_on:
+      backend: {condition: service_healthy}
+    logging: *logging
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD-SHELL, "wget --no-check-certificate -q -O /dev/null https://127.0.0.1:8443/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+volumes:
+  postgres-data:
+  mosquitto-data:
+networks:
+  app:
+  storage:
+    internal: true

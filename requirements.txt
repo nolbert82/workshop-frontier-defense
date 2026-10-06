@@ -1,2 +1,5 @@
-ultralytics
-opencv-python
+-r backend/requirements.txt
+ultralytics==8.4.173
+opencv-python==4.11.0.86
+cryptography==45.0.4
+cv2-enumerate-cameras==1.3.2

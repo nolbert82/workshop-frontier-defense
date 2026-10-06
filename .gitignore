@@ -1,0 +1,15 @@
+.venv*/
+node_modules/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.tsbuildinfo
+*.log
+secrets/
+data/
+output/
+tmp/
+frontend/dist/
+.env
+.env.*
+!.env.example
