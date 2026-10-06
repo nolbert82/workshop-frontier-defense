@@ -8,7 +8,7 @@ Les résultats ci-dessous décrivent uniquement ce qui a été exécuté pendant
 | Compilation React/TypeScript/Vite | Réussie ; bundle principal environ 563 Ko (169 Ko gzip) |
 | API et tâches réellement lancées | FastAPI sur loopback, SQLite persistante, simulateur 1 Hz |
 | Recette intégrée | Réussie : commandes, WebSocket, MJPEG, capteur invalide, coupure, intrusion, timeout, dérive et résolution |
-| Navigateur bureau | Connexion, courbes, vidéo fictive, commande et historique vérifiés ; webcam réelle affichée en 640 × 480 avec badge « Direct » |
+| Navigateur bureau | Connexion, courbes, commande et historique vérifiés ; webcam réelle affichée en 640 × 480 avec badge « Direct » |
 | Affichage mobile | 375 px de largeur utile, aucun débordement horizontal de la page principale |
 | Poids YOLO26 existants | Chargés et utilisés sur une image noire synthétique ; zéro personne détectée |
 | Webcam USB réelle | UGREEN Camera sélectionnée par nom ; capture 640 × 480 et MJPEG authentifié vérifiés, heartbeat réel accepté |

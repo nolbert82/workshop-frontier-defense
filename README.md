@@ -2,27 +2,21 @@
 
 Prototype local de surveillance industrielle : **FastAPI, React/TypeScript, PostgreSQL, MQTT TLS, YOLO26 et Isolation Forest**. Les capteurs, le boîtier et les actionneurs sont remplacés par `simulator-01` tant que le montage n'est pas terminé. Aucun appel cloud, CDN ou téléchargement de modèle au démarrage.
 
-## Démarrage rapide sous Windows
+## Démarrage avec Docker Desktop
 
 Prérequis : Python 3.12, Node.js 22 et pnpm 11.25.0. Une connexion Internet est nécessaire pour préparer les dépendances ; elle n'est plus nécessaire pendant la démonstration.
 
 ```powershell
 python -m venv .venv-dev
 .venv-dev\Scripts\python.exe -m pip install -r requirements-local.lock.txt
-cd frontend
-pnpm install --frozen-lockfile
-pnpm build
-cd ..
 .venv-dev\Scripts\python.exe scripts/setup.py --ip 192.168.50.1
 .venv-dev\Scripts\python.exe -m backend.ml.train
-.\scripts\start-local.ps1
+.\scripts\start-docker.ps1
 ```
 
-Le dashboard est à **http://127.0.0.1:8000**. Le compte `operateur` et son mot de passe aléatoire sont dans **`secrets/operator.txt`**. La configuration déjà générée n'est jamais écrasée. Ctrl+C arrête le serveur et son service vision.
+Le dashboard est à **https://localhost**. Le compte `operateur` et son mot de passe aléatoire sont dans **`secrets/operator.txt`**. La configuration déjà générée n'est jamais écrasée. Ctrl+C arrête le service vision ; les conteneurs peuvent être arrêtés avec `docker compose --env-file secrets/compose.env stop`.
 
-Le mode rapide utilise **SQLite et HTTP sur loopback**, pour travailler sans Docker. Il conserve les données dans `data/sentinel.db`. Le mode de démonstration réseau ci-dessous utilise PostgreSQL, HTTPS et MQTTS. Ne pas exposer le mode rapide au réseau. Les cookies Secure sont désactivés uniquement par le lanceur local, pas par défaut.
-
-La webcam USB réelle est activée par défaut ; les capteurs et actionneurs restent simulés. Pour une démonstration entièrement fictive, lancer `.\scripts\start-local.ps1 -SimulatedCamera` : la vidéo affiche alors « SIMULATION ». Le menu des scénarios pilote une dérive progressive, une présence fictive, une panne DHT22, une coupure de boîtier ou une commande sans confirmation. Le modèle nécessite 30 secondes de mesures valides après démarrage ou interruption. Les commandes passent par `pending`, puis `executed`, `rejected` ou `timeout`. Un timeout signifie que l'exécution est inconnue.
+La webcam USB réelle est obligatoire pour la vision ; si elle est absente, le dashboard affiche « Indisponible ». Les capteurs et actionneurs restent simulés. Le menu des scénarios pilote une dérive progressive, une présence fictive, une panne DHT22, une coupure de boîtier ou une commande sans confirmation. Le modèle nécessite 30 secondes de mesures valides après démarrage ou interruption. Les commandes passent par `pending`, puis `executed`, `rejected` ou `timeout`. Un timeout signifie que l'exécution est inconnue.
 
 ## Démonstration réseau avec Docker Desktop
 
@@ -33,8 +27,6 @@ La webcam USB réelle est activée par défaut ; les capteurs et actionneurs res
 
 ```powershell
 .\scripts\start-docker.ps1
-# Vidéo fictive, sans webcam :
-.\scripts\start-docker.ps1 -SimulatedCamera
 ```
 
 Lance quatre services (`web`, `backend`, `postgres`, `mosquitto`) et la vision sous Windows. Le dashboard est à **https://localhost** ou **https://ADRESSE_REELLE**. Le service vision écoute TCP 8090 pour être accessible depuis Docker Desktop via `host.docker.internal`. **Limiter ce port au réseau Docker dans le pare-feu Windows** ; il ne doit pas être autorisé pour les autres appareils Wi-Fi. Il exige en complément le secret du service vision. N'autoriser que 443 et 8883 depuis le sous-réseau de l'équipe. Aucun port PostgreSQL ou FastAPI n'est publié.
@@ -53,7 +45,7 @@ Le fichier existant `vision/model/yolo26n.pt` est utilisé localement. Pour la w
 
 ```powershell
 .venv-dev\Scripts\python.exe -m pip install -r requirements.txt
-.\scripts\start-local.ps1
+.\scripts\start-docker.ps1
 ```
 
 La sélection enregistrée dans `vision/camera.json` est **UGREEN Camera**. Le service retrouve son index par son nom à chaque ouverture ; si elle est débranchée, il signale son absence et réessaie sans basculer vers la caméra intégrée. Modifier ce fichier pour une autre webcam. Le lanceur choisit automatiquement l'environnement `.venv` équipé de YOLO, puis l'environnement du backend s'il contient les dépendances nécessaires. `-VisionPython CHEMIN` permet de préciser un autre interpréteur.

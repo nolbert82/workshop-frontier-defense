@@ -1,10 +1,10 @@
-param([string]$Python = "", [string]$FallbackPython = "", [switch]$SimulatedCamera)
+param([string]$Python = "", [string]$FallbackPython = "")
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$candidates = if ($Python) { @($Python) } elseif ($SimulatedCamera) { @($FallbackPython) } else {
+$candidates = if ($Python) { @($Python) } else {
     @((Join-Path $projectRoot '.venv/Scripts/python.exe'), $FallbackPython)
 }
-$modules = if ($SimulatedCamera) { "['cv2','httpx']" } else { "['cv2','httpx','ultralytics','torch','cv2_enumerate_cameras']" }
+$modules = "['cv2','httpx','ultralytics','torch','cv2_enumerate_cameras']"
 foreach ($candidate in $candidates) {
     if (!$candidate -or !(Test-Path -LiteralPath $candidate)) { continue }
     $check = & $candidate -c "import importlib.util; print(all(importlib.util.find_spec(m) is not None for m in $modules))" 2>$null
