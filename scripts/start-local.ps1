@@ -17,7 +17,7 @@ $env:SENTINEL_SECURE_COOKIES = "false"
 $visionArguments = @("-m", "vision.service", "--url", "http://127.0.0.1:8000")
 if ($SimulatedCamera) { $visionArguments += "--simulate" }
 $vision = Start-Process -FilePath $selectedVisionPython -ArgumentList $visionArguments -WindowStyle Hidden -PassThru -RedirectStandardOutput data/vision.stdout.log -RedirectStandardError data/vision.stderr.log
-Write-Host "Dashboard : http://127.0.0.1:8000 — compte dans secrets/operator.txt"
-Write-Host "Mode local de développement : SQLite et HTTP sur loopback. Ctrl+C pour arrêter."
+Write-Host "Dashboard : http://127.0.0.1:8000 (compte dans secrets/operator.txt)"
+Write-Host "Mode local : SQLite et HTTP sur loopback. Ctrl+C pour arreter."
 try { & $Python -m uvicorn backend.app.main:create_app --factory --host 127.0.0.1 --port 8000 --workers 1 --no-proxy-headers }
 finally { Stop-Process -Id $vision.Id -ErrorAction SilentlyContinue; Remove-Item Env:SENTINEL_SECURE_COOKIES -ErrorAction SilentlyContinue }
