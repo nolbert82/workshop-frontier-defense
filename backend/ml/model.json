@@ -1,0 +1,27 @@
+{
+  "version": "synthetic-v1",
+  "training_source": "simulated",
+  "features": [
+    "temperature",
+    "humidity",
+    "gas",
+    "delta_temperature",
+    "delta_gas",
+    "mean_gas",
+    "std_gas"
+  ],
+  "threshold": 0.5907338539414331,
+  "n_estimators": 100,
+  "seed": 42,
+  "sequences": {
+    "train": 10,
+    "validation": 20,
+    "test_normal": 30,
+    "test_drift": 40
+  },
+  "normal_observations_over_threshold": 5,
+  "normal_observations": 586,
+  "drift_observations_over_threshold": 454,
+  "drift_observations": 586,
+  "limitations": "Évaluation par observations, pas par épisodes. Ce score n'est pas une probabilité. Données synthétiques uniquement ; recalibrer sur collecte physique."
+}

@@ -1,0 +1,12 @@
+.git
+.venv*
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+secrets
+data
+output
+tmp
+frontend/dist
+sujet.pdf
+vision/model

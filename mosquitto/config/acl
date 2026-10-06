@@ -1,0 +1,16 @@
+user backend
+topic read sentinel/sentinel-x-01/telemetry
+topic read sentinel/sentinel-x-01/status
+topic read sentinel/sentinel-x-01/acks
+topic write sentinel/sentinel-x-01/commands
+topic write sentinel/sentinel-x-01/receipts
+
+user sentinel-x-01
+topic write sentinel/sentinel-x-01/telemetry
+topic write sentinel/sentinel-x-01/status
+topic write sentinel/sentinel-x-01/acks
+topic read sentinel/sentinel-x-01/commands
+topic read sentinel/sentinel-x-01/receipts
+
+user health
+topic read sentinel/sentinel-x-01/status
