@@ -3,7 +3,6 @@ import argparse
 from collections import deque
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import statistics
@@ -64,7 +63,6 @@ class Vision:
         self.model_ok = False
         self.latencies = deque(maxlen=300)
         self.events = deque()
-        self.scenario = "normal"
         self.tracker = PresenceTracker()
         self.threads = []
         self.stream_id = uuid.uuid4().hex
@@ -73,9 +71,14 @@ class Vision:
         camera = None
         try:
             while not self.stop.is_set():
+                if self.args.source == "bridge":
+                    with self.lock:
+                        self.camera_ok = bool(self.latest and time.monotonic()-self.latest[1] < 2)
+                    self.stop.wait(.1)
+                    continue
                 if camera is None:
                     try:
-                        selected = camera_index(self.args.camera, self.args.camera_name)
+                        selected = self.args.source or camera_index(self.args.camera, self.args.camera_name)
                     except (RuntimeError, ImportError):
                         self.camera_ok = False
                         log.warning("Webcam configurée indisponible", exc_info=True)
@@ -182,39 +185,66 @@ class Vision:
             self.threads.append(thread)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--camera", type=int, default=None)
-    parser.add_argument("--camera-name", default=None)
-    parser.add_argument("--camera-config", default="vision/camera.json")
-    parser.add_argument("--model", default="vision/model/yolo26n.pt")
-    parser.add_argument("--imgsz", type=int, default=320)
-    parser.add_argument("--url", default="https://localhost")
-    parser.add_argument("--ca", default="secrets/ca.crt")
-    parser.add_argument("--bind", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8090)
-    parser.add_argument("--config", default="secrets/app.json")
-    args = parser.parse_args()
-    camera_settings = json.loads(Path(args.camera_config).read_text(encoding="utf-8")) if Path(args.camera_config).exists() else {}
-    if args.camera is None:
-        args.camera = camera_settings.get("index", 0)
-        args.camera_name = args.camera_name or camera_settings.get("name")
-    Path("data").mkdir(exist_ok=True)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[RotatingFileHandler("data/vision.log", maxBytes=10*1024*1024, backupCount=3, encoding="utf-8")])
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    token = json.loads(Path(args.config).read_text(encoding="utf-8"))["vision_token"]
-    vision = Vision(args, token)
-
+def handler_for(vision, token):
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.connection.settimeout(5)
+            self.close_connection = True
+            if not hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + token):
+                self.send_error(401)
+                return
+            if self.path != "/frames" or vision.args.source != "bridge":
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.send_error(400)
+                return
+            if not 0 < length <= 1024*1024:
+                self.send_error(413)
+                return
+            if self.headers.get("Content-Type") != "image/jpeg":
+                self.send_error(415)
+                return
+            try:
+                data = self.rfile.read(length)
+            except TimeoutError:
+                self.send_error(408)
+                return
+            if len(data) != length or not data.startswith(b"\xff\xd8"):
+                self.send_error(400)
+                return
+            try:
+                frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            except cv2.error:
+                self.send_error(400)
+                return
+            if frame is None or frame.shape[:2] != (480, 640):
+                self.send_error(400)
+                return
+            with vision.lock:
+                vision.latest = (frame, time.monotonic())
+                vision.frame_number += 1
+                vision.camera_ok = True
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def do_GET(self):
             if not hmac.compare_digest(self.headers.get("Authorization", ""), "Bearer " + token):
                 self.send_error(401)
                 return
             if self.path == "/health":
+                with vision.lock:
+                    status = {"alive": True, "camera": bool(vision.latest and time.monotonic()-vision.latest[1] < 2),
+                              "model": vision.model_ok}
+                content = json.dumps(status).encode()
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
-                self.wfile.write(b'{"alive":true}')
+                self.wfile.write(content)
                 return
             if self.path != "/stream":
                 self.send_error(404)
@@ -237,8 +267,33 @@ def main():
                 pass
         def log_message(self, *args):
             pass
+    return Handler
 
-    server = ThreadingHTTPServer((args.bind, args.port), Handler)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", default=os.getenv("VISION_SOURCE"), help="bridge, URL du flux webcam ou périphérique /dev/video0")
+    parser.add_argument("--camera", type=int, default=None)
+    parser.add_argument("--camera-name", default=None)
+    parser.add_argument("--camera-config", default="vision/camera.json")
+    parser.add_argument("--model", default="vision/model/yolo26n.pt")
+    parser.add_argument("--imgsz", type=int, default=320)
+    parser.add_argument("--url", default=os.getenv("VISION_BACKEND_URL", "https://localhost"))
+    parser.add_argument("--ca", default="secrets/ca.crt")
+    parser.add_argument("--bind", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8090)
+    parser.add_argument("--config", default="secrets/app.json")
+    args = parser.parse_args()
+    camera_settings = json.loads(Path(args.camera_config).read_text(encoding="utf-8")) if Path(args.camera_config).exists() else {}
+    if args.camera is None:
+        args.camera = camera_settings.get("index", 0)
+        args.camera_name = args.camera_name or camera_settings.get("name")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[logging.StreamHandler()])
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    token = json.loads(Path(args.config).read_text(encoding="utf-8"))["vision_token"]
+    vision = Vision(args, token)
+    server = ThreadingHTTPServer((args.bind, args.port), handler_for(vision, token))
     vision.start()
     print(f"Vision {args.camera_name or 'USB index '+str(args.camera)} : {args.bind}:{args.port}", flush=True)
     try:

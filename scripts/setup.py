@@ -32,7 +32,7 @@ def main():
     broker, device, health, postgres, vision = [secrets.token_urlsafe(32) for _ in range(5)]
     config = {"password_hash": hash_password(password), "vision_token": vision, "mqtt_password": broker,
         "origins": ["https://localhost", "https://127.0.0.1", f"https://{address}", "http://127.0.0.1:8000", "http://localhost:8000", "http://127.0.0.1:5173", "http://localhost:5173"],
-        "simulation": True, "secure_cookies": True}
+        "secure_cookies": True}
     now = datetime.now(timezone.utc)
     ca_key, server_key = [rsa.generate_private_key(public_exponent=65537, key_size=2048) for _ in range(2)]
     ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "SENTINEL-X Local Workshop CA")])

@@ -48,11 +48,13 @@ services:
       SENTINEL_DATABASE_URL: postgresql+psycopg://sentinel:${POSTGRES_PASSWORD}@postgres:5432/sentinel
       SENTINEL_MQTT_HOST: mosquitto
       SENTINEL_MQTT_CA: /run/tls/ca.crt
-      SENTINEL_VISION_URL: http://host.docker.internal:8090
+      SENTINEL_VISION_URL: http://vision:8090
+      SENTINEL_MODEL_PATH: /app/data/models/anomaly.joblib
       SENTINEL_SECURE_COOKIES: "true"
     volumes:
       - ./secrets/app.json:/run/secrets/app.json:ro
       - ./secrets/tls/ca.crt:/run/tls/ca.crt:ro
+      - models-data:/app/data
     networks: [app, storage]
     depends_on:
       postgres: {condition: service_healthy}
@@ -64,6 +66,28 @@ services:
     security_opt: [no-new-privileges:true]
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
+      interval: 10s
+      timeout: 4s
+      retries: 5
+  vision:
+    build: {context: ., dockerfile: vision/Dockerfile}
+    restart: unless-stopped
+    environment:
+      VISION_BACKEND_URL: http://backend:8000
+      VISION_SOURCE: ${VISION_SOURCE:-}
+    volumes:
+      - ./secrets/app.json:/run/secrets/app.json:ro
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [app]
+    depends_on:
+      backend: {condition: service_healthy}
+    logging: *logging
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import json, urllib.request; token=json.load(open('/run/secrets/app.json'))['vision_token']; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8090/health', headers={'Authorization':'Bearer '+token}))"]
       interval: 10s
       timeout: 4s
       retries: 5
@@ -86,6 +110,7 @@ services:
       timeout: 3s
       retries: 5
 volumes:
+  models-data:
   postgres-data:
   mosquitto-data:
 networks:

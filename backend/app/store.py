@@ -24,6 +24,12 @@ class Store:
 
     def initialize(self):
         self.meta.create_all(self.engine)
+        # Remove only legacy fictitious data; physical history is preserved.
+        with self.engine.begin() as conn:
+            for tab in (self.measurements, self.alerts, self.commands, self.devices):
+                for id_, data in conn.execute(select(tab.c.id, tab.c.data)):
+                    if data.get("source") == "simulated" or data.get("device_id") == "simulator-01":
+                        conn.execute(tab.delete().where(tab.c.id == id_))
         # After restart, an unconfirmed command remains execution-unknown.
         for row in self.list_rows("commands", 10000):
             if row["status"] == "pending":

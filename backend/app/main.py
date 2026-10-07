@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 from backend.app.config import Settings
 from backend.app.runtime import Runtime
-from backend.app.schemas import CommandRequest, Heartbeat, Login, Scenario, VisionEvent
+from backend.app.schemas import CommandRequest, Heartbeat, Login, VisionEvent
 from backend.app.security import Auth
 from backend.app.store import Store, utcnow
 
@@ -114,12 +114,6 @@ def create_app(settings=None):
         runtime.vision_at, runtime.vision = time.monotonic(), heartbeat.model_dump()
         return {"ok": True}
 
-    @app.get("/api/v1/vision/simulation", dependencies=[Depends(auth.service)])
-    async def vision_scenario():
-        if not settings.simulation:
-            raise HTTPException(409, "Simulation désactivée")
-        return {"scenario": runtime.scenario}
-
     @app.post("/api/v1/alerts/{id_}/ack", dependencies=[Depends(auth.write)])
     async def acknowledge(id_: str):
         async with runtime.lock:
@@ -151,12 +145,14 @@ def create_app(settings=None):
             raise HTTPException(404, "Commande inconnue")
         return row
 
-    @app.post("/api/v1/simulation", dependencies=[Depends(auth.write)])
-    async def scenario(payload: Scenario):
-        if not settings.simulation:
-            raise HTTPException(409, "Simulation désactivée")
-        runtime.scenario, runtime.scenario_at = payload.scenario, time.monotonic()
-        return {"scenario": payload.scenario}
+    @app.post("/api/v1/model/retrain", dependencies=[Depends(auth.write)])
+    async def retrain():
+        try:
+            return await runtime.retrain()
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except OSError as exc:
+            raise HTTPException(503, "Sauvegarde du modèle impossible : précédent modèle conservé.") from exc
 
     @app.get("/api/v1/video", dependencies=[Depends(auth.read)])
     async def video():

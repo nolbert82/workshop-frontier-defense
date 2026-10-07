@@ -1,4 +1,5 @@
 .venv*/
+backend/ml/*.joblib
 node_modules/
 __pycache__/
 .pytest_cache/

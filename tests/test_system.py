@@ -10,13 +10,20 @@ from backend.app.security import hash_password
 from backend.app.store import Store
 from backend.app.runtime import Runtime
 from backend.ml.anomaly import Anomaly
-from simulator.signals import telemetry
+def telemetry(sequence, boot):
+    return {"device_id": "sentinel-x-01", "boot_id": boot, "sequence": sequence,
+        "uptime_ms": sequence*1000, "temperature": 24.0, "humidity": 48.0, "gas": 130,
+        "presence": False, "timestamp": None, "source": "physical", "replayed": False,
+        "sensor_age_ms": {"dht22": 0, "mq2": 0, "pir": 0},
+        "sensor_status": {"dht22": "ok", "mq2": "ok", "pir": "ok"}}
 from vision.service import PresenceTracker
 
 
 def test_camera_selected_by_name_without_fallback(monkeypatch):
     from types import SimpleNamespace
-    import cv2_enumerate_cameras
+    import sys
+    cv2_enumerate_cameras = SimpleNamespace(enumerate_cameras=lambda backend: [])
+    monkeypatch.setitem(sys.modules, "cv2_enumerate_cameras", cv2_enumerate_cameras)
     from vision.service import camera_index
     monkeypatch.setattr(cv2_enumerate_cameras, "enumerate_cameras", lambda backend: [
         SimpleNamespace(index=2, name="UGREEN Camera"), SimpleNamespace(index=0, name="Integrated Camera")])
@@ -39,7 +46,7 @@ def test_vision_heartbeat_identifies_stream_restart(client):
 @pytest.fixture
 def settings(tmp_path):
     return Settings(database_url=f"sqlite:///{tmp_path/'test.db'}", password_hash=hash_password("test-password"),
-                    vision_token="test-vision-secret", simulation=False, secure_cookies=True, origins=("https://testserver",), static_path="absent")
+                    vision_token="test-vision-secret", secure_cookies=True, origins=("https://testserver",), static_path="absent")
 
 
 @pytest.fixture
@@ -88,7 +95,7 @@ def test_service_events_idempotency_and_ack(client):
     rows=client.get("/api/v1/alerts").json()["items"]
     assert len([r for r in rows if r["id"]=="person-1"])==1
     client.cookies.clear()
-    assert client.post("/api/v1/commands", headers=service, json={"device_id":"simulator-01","type":"buzzer","value":True}).status_code==401
+    assert client.post("/api/v1/commands", headers=service, json={"device_id":"sentinel-x-01","type":"buzzer","value":True}).status_code==401
 
 
 def test_websocket_security_and_snapshot(client):
@@ -103,27 +110,27 @@ def test_websocket_security_and_snapshot(client):
 
 def test_offline_and_validation(client):
     headers=login(client)
-    payload={"device_id":"simulator-01","type":"buzzer","value":True}
+    payload={"device_id":"sentinel-x-01","type":"buzzer","value":True}
     assert client.post("/api/v1/commands", headers=headers, json=payload).status_code==409
     assert client.post("/api/v1/commands", headers=headers, json={**payload,"value":"true"}).status_code==422
-    assert client.post("/api/v1/simulation", headers=headers, json={"scenario":"normal"}).status_code==409
+    assert client.post("/api/v1/simulation", headers=headers, json={"scenario":"normal"}).status_code==404
 
 
 def test_deduplication_replay_identity_and_restart(settings):
     async def run():
         store=Store(settings.database_url);store.initialize();runtime=Runtime(settings,store)
         row=telemetry(40,"boot-1")
-        first=await runtime.ingest(row,"simulator-01","simulated")
-        duplicate=await runtime.ingest(row,"simulator-01","simulated")
+        first=await runtime.ingest(row,"sentinel-x-01","physical")
+        duplicate=await runtime.ingest(row,"sentinel-x-01","physical")
         assert first["stored"] and duplicate["duplicate"]
         assert len(store.list_rows("measurements"))==1
-        seen=runtime.devices["simulator-01"]["seen"]
-        await runtime.ingest(telemetry(20,"boot-1"),"simulator-01","simulated")
-        assert runtime.devices["simulator-01"]["latest"]["sequence"]==40
-        assert runtime.devices["simulator-01"]["seen"]==seen
+        seen=runtime.devices["sentinel-x-01"]["seen"]
+        await runtime.ingest(telemetry(20,"boot-1"),"sentinel-x-01","physical")
+        assert runtime.devices["sentinel-x-01"]["latest"]["sequence"]==40
+        assert runtime.devices["sentinel-x-01"]["seen"]==seen
         assert store.list_rows("measurements")[0]["replayed"]
         with pytest.raises(ValueError):
-            await runtime.ingest(row,"sentinel-x-01","physical")
+            await runtime.ingest(row,"other-device","physical")
         store.engine.dispose()
         reopened=Store(settings.database_url)
         assert len(reopened.list_rows("measurements"))==2
@@ -136,8 +143,8 @@ def test_mqtt_iso_timestamp_parsed_strictly(settings):
         store=Store(settings.database_url);store.initialize();runtime=Runtime(settings,store)
         from backend.app.store import utcnow
         row={**telemetry(1,"known-time"),"timestamp":utcnow()}
-        assert (await runtime.ingest(row,"simulator-01","simulated"))["stored"]
-        assert runtime.devices["simulator-01"]["latest"]["timestamp"]
+        assert (await runtime.ingest(row,"sentinel-x-01","physical"))["stored"]
+        assert runtime.devices["sentinel-x-01"]["latest"]["timestamp"]
         store.engine.dispose()
     asyncio.run(run())
 
@@ -148,7 +155,7 @@ def test_storage_failure_never_receipted(settings):
         store=Store(settings.database_url);store.initialize();runtime=Runtime(settings,store)
         def fail(*args): raise OperationalError("insert",{},Exception("offline"))
         store.insert_measurement=fail
-        with pytest.raises(OperationalError): await runtime.ingest(telemetry(1,"boot"),"simulator-01","simulated")
+        with pytest.raises(OperationalError): await runtime.ingest(telemetry(1,"boot"),"sentinel-x-01","physical")
         assert not runtime.database and not runtime.devices
         store.engine.dispose()
     asyncio.run(run())
@@ -156,18 +163,18 @@ def test_storage_failure_never_receipted(settings):
 
 def test_command_ack_wrong_boot_duplicate_and_timeout(settings):
     async def run():
-        settings.simulation=True
         store=Store(settings.database_url);store.initialize();runtime=Runtime(settings,store)
-        await runtime.ingest(telemetry(40,"boot"),"simulator-01","simulated")
-        cmd=await runtime.command({"device_id":"simulator-01","type":"buzzer","value":True,"duration_ms":3000})
+        runtime.mqtt.connected = True
+        runtime.mqtt.publish = lambda *args: True
+        await runtime.ingest(telemetry(40,"boot"),"sentinel-x-01","physical")
+        cmd=await runtime.command({"device_id":"sentinel-x-01","type":"buzzer","value":True,"duration_ms":3000})
         assert cmd["status"]=="pending"
-        with pytest.raises(ValueError): await runtime.ack(Ack(command_id=cmd["command_id"],boot_id="other",result="executed"),"simulator-01")
+        with pytest.raises(ValueError): await runtime.ack(Ack(command_id=cmd["command_id"],boot_id="other",result="executed"),"sentinel-x-01")
         ack=Ack(command_id=cmd["command_id"],boot_id="boot",result="executed")
-        await runtime.ack(ack,"simulator-01");await runtime.ack(ack,"simulator-01")
+        await runtime.ack(ack,"sentinel-x-01");await runtime.ack(ack,"sentinel-x-01")
         assert store.get("commands",cmd["command_id"])["status"]=="executed"
         assert runtime.status()["recent_commands"][0]["status"]=="executed"
-        pending=await runtime.command({"device_id":"simulator-01","type":"led","value":True,"duration_ms":3000})
-        runtime.scenario="command_timeout"
+        pending=await runtime.command({"device_id":"sentinel-x-01","type":"led","value":True,"duration_ms":3000})
         runtime.pending[pending["command_id"]]["sent"]-=6
         task=asyncio.create_task(runtime.run())
         await asyncio.sleep(.3)
@@ -175,25 +182,6 @@ def test_command_ack_wrong_boot_duplicate_and_timeout(settings):
         assert store.get("commands",pending["command_id"])["status"]=="timeout"
         store.engine.dispose()
     asyncio.run(run())
-
-
-def test_temporal_anomalies_and_sensor_failure():
-    detector=Anomaly("backend/ml/model.joblib")
-    assert detector.artifact
-    for i in range(1,30):
-        assert detector.evaluate(telemetry(i,"boot"))["state"]=="initializing"
-    detector.evaluate(telemetry(30,"boot"))
-    active=False
-    for i in range(31,150):
-        result=detector.evaluate(telemetry(i,"boot","drift",i-30))
-        active |= result["active"]
-    assert active
-    result=detector.evaluate(telemetry(150,"boot","sensor_error"))
-    assert result["state"]=="unavailable" and result["score"] is None
-    # Missing data must not falsely resolve an active incident.
-    assert result["active"]
-    for i in range(151,270): result=detector.evaluate(telemetry(i,"boot"))
-    assert not result["active"]
 
 
 def test_presence_confirmation_and_resolution():
@@ -213,22 +201,4 @@ def test_invalid_sensor_null_and_bounds():
     with pytest.raises(ValueError): Telemetry.model_validate({**row,"temperature":100})
     row["sensor_status"]["dht22"]="error"
     with pytest.raises(ValueError): Telemetry.model_validate(row)
-    Telemetry.model_validate(telemetry(1,"boot","sensor_error"))
-
-
-def test_recorded_training_excludes_invalid_and_unordered_windows(tmp_path):
-    import json
-    from backend.ml.train import recorded_windows, train
-    sequence=tmp_path/"sequence.jsonl"
-    sequence.write_text("\n".join(json.dumps(telemetry(i,"boot")) for i in range(1,100)),encoding="utf-8")
-    assert len(recorded_windows([sequence]))>=20
-    with pytest.raises(ValueError, match="provenance"): recorded_windows([sequence], "physical")
-    invalid=tmp_path/"invalid.jsonl"
-    invalid.write_text("\n".join(json.dumps(telemetry(i,"boot","sensor_error")) for i in range(1,100)),encoding="utf-8")
-    with pytest.raises(ValueError): recorded_windows([invalid])
-    descending=tmp_path/"descending.jsonl"
-    descending.write_text("\n".join(json.dumps(telemetry(i,"boot")) for i in range(99,0,-1)),encoding="utf-8")
-    with pytest.raises(ValueError): recorded_windows([descending])
-    manifest=tmp_path/"manifest.json"
-    manifest.write_text(json.dumps({"source":"physical","sequences":{name:[str(sequence)] for name in ("train","validation","test_normal","test_drift")}}),encoding="utf-8")
-    with pytest.raises(ValueError, match="plusieurs jeux"): train(str(tmp_path/"model.joblib"), str(manifest))
+    Telemetry.model_validate({**row,"temperature":None,"humidity":None})

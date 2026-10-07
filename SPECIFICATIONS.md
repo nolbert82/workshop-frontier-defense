@@ -1,6 +1,6 @@
 # SENTINEL-X — Spécification fonctionnelle et technique
 
-Version 1.0 — 5 octobre 2026
+Version 1.1 — 7 octobre 2026
 
 ## 1. Objet et portée
 
@@ -25,11 +25,11 @@ Le périmètre est un boîtier, une webcam, un serveur et quelques navigateurs l
 | Stockage | PostgreSQL ; accès réservé au backend |
 | Vision | Python, OpenCV et YOLO26-n préentraîné (`yolo26n.pt`), classe `person` uniquement |
 | Anomalies | scikit-learn Isolation Forest, intégré au backend |
-| Déploiement | Quatre conteneurs : `web`, `backend`, `postgres`, `mosquitto` ; service `vision` sur Windows |
+| Déploiement | Cinq conteneurs : `web`, `backend`, `postgres`, `mosquitto`, `vision` |
 
 PostgreSQL est conservé pour son service dédié et sa persistance dans Compose. SQLite aurait aussi suffi à ce volume avec une seule API : la séparation des services ne rend pas PostgreSQL indispensable. Ni le navigateur ni le service vision n'accèdent directement à la base.
 
-Le serveur est le PC portable Windows de l'équipe. La variante prévue pour Windows devient l'architecture retenue : le service vision s'exécute directement sur Windows pour accéder à la webcam USB, et les quatre autres services restent dans Docker Desktop. Les interfaces applicatives restent identiques. La disponibilité du point d'accès Wi-Fi local et les échanges entre Windows et les conteneurs seront vérifiés sur ce portable.
+Les cinq services tournent dans Compose. La webcam USB est transmise directement sous Linux. Sous Windows, le lanceur démarre automatiquement une capture USB dans `.venv`, qui envoie les images au conteneur vision via un endpoint local authentifié. Aucune URL de caméra n'est à configurer. YOLO reste dans Docker ; ses poids officiels sont téléchargés et vérifiés à la construction de l'image. Un seul environnement Python local `.venv`, créé avec uv et Python 3.12.11, sert à la capture, aux outils et tests.
 
 ## 3. Architecture et réseau
 
@@ -46,9 +46,10 @@ flowchart LR
     subgraph PC["NOTRE PC PORTABLE — Windows"]
         WIFI["Point d'accès Wi-Fi local"]
         LOCAL["Navigateur local exécutant React"]
-        V["Service Python sur Windows<br/>OpenCV + YOLO26-n"]
+        CAP["Capture USB Windows<br/>Python .venv — sans IA"]
 
-        subgraph DOCKER["Docker Desktop / Compose — 4 conteneurs"]
+        subgraph DOCKER["Docker Desktop / Compose — 5 conteneurs"]
+            V["vision<br/>OpenCV + YOLO26-n"]
             M["mosquitto<br/>Broker MQTT"]
             B["backend<br/>FastAPI + WebSocket + Isolation Forest"]
             P[("postgres<br/>PostgreSQL")]
@@ -59,8 +60,8 @@ flowchart LR
             W <-->|API et WebSocket internes| B
         end
 
-        V -->|Événements via API HTTPS| W
-        V -->|Flux MJPEG local| W
+        V -->|Événements HTTP internes avec secret| B
+        V -->|Flux MJPEG interne avec secret| B
         WIFI <-->|Port 8883 — MQTTS| M
         WIFI <-->|Port 443 — HTTPS / WSS| W
         LOCAL <-->|HTTPS / WSS| W
@@ -68,14 +69,15 @@ flowchart LR
 
     E <-->|Wi-Fi local — MQTTS| WIFI
     U <-->|Wi-Fi local — HTTPS / WSS| WIFI
-    CAM -->|USB — accès direct sous Windows| V
+    CAM -->|USB Windows| CAP
+    CAP -->|JPEG + secret via 127.0.0.1:8090| V
 
     style PC fill:#eaf3ff,stroke:#2563eb,stroke-width:2px
     style DOCKER fill:#f8fafc,stroke:#64748b
     style BOITIER fill:#fff7ed,stroke:#ea580c,stroke-width:2px
 ```
 
-Le bloc bleu contient ce qui tourne sur notre PC Windows : quatre services dans Docker Desktop, le service vision Python hors Docker, le point d'accès Wi-Fi et le navigateur local. Le boîtier et la webcam sont des composants physiques externes. Le dashboard peut être ouvert sur le PC serveur ou sur un autre appareil du réseau : React s'exécute dans le navigateur, tandis que Nginx en distribue les fichiers.
+Le bloc bleu contient ce qui tourne sur notre PC Windows : cinq services dans Docker Desktop, le point d'accès Wi-Fi et le navigateur local. Le boîtier et la webcam sont des composants physiques externes. Le dashboard peut être ouvert sur le PC serveur ou sur un autre appareil du réseau : React s'exécute dans le navigateur, tandis que Nginx en distribue les fichiers.
 
 Le portable fournit un point d'accès Wi-Fi local en 2,4 GHz, protégé par WPA2 et un mot de passe propre à l'équipe. L'ESP8266 et les postes de consultation rejoignent ce réseau. L'ESP8266 fonctionne en client Wi-Fi ; il ne sert pas le dashboard.
 
@@ -89,7 +91,7 @@ Le navigateur ouvre `https://192.168.50.1`. Le certificat web contient cette adr
 | TCP 8883 | MQTT chiffré | Réseau local de l'équipe |
 | TCP 22 | Administration SSH, si nécessaire | Poste d'administration autorisé uniquement |
 
-PostgreSQL et FastAPI ne publient aucun port sur l'hôte. Les conteneurs utilisent leurs noms de services sur les réseaux Docker. Le service vision Windows transmet ses événements via l'API HTTPS publiée par Nginx. Nginx relaie le flux vidéo du service Windows ; cette liaison locale doit être accessible depuis Docker Desktop et bloquée pour les autres postes par le pare-feu Windows. Les flux Wi-Fi applicatifs sont chiffrés. Le rapport explicite ces terminaisons TLS plutôt que d'affirmer un chiffrement de chaque liaison interne.
+PostgreSQL et FastAPI ne publient aucun port sur l'hôte. Les conteneurs utilisent leurs noms de services sur les réseaux Docker. Le conteneur vision transmet ses événements au backend sur le réseau Docker ; le backend relaie son flux vidéo authentifié. Les flux Wi-Fi applicatifs sont chiffrés. Le rapport explicite ces terminaisons TLS plutôt que d'affirmer un chiffrement de chaque liaison interne.
 
 ## 4. Matériel et acquisition
 
@@ -202,7 +204,7 @@ Conservation : toutes les mesures, décisions d'anomalie valides et transitions 
 
 ## 8. Vision locale
 
-Un seul service accède à la webcam USB. Il capture les images, applique YOLO26-n et expose le flux annoté MJPEG. L'API reçoit les événements de présence ; elle ne transporte pas les images via WebSocket.
+Un seul processus accède à la webcam USB : la capture Windows ou le service vision sous Linux. Sous Windows, la capture envoie seulement la dernière image JPEG au conteneur vision, qui applique YOLO26-n et expose le flux annoté MJPEG. Sous Linux, le conteneur capture directement les images USB. L'API reçoit les événements de présence ; elle ne transporte pas les images via WebSocket.
 
 Paramètres initiaux : capture 640 × 480, analyse des images les plus récentes sans file d'attente croissante, modèle `yolo26n.pt`, CPU par défaut, seuil de détection 0,60. Une personne est confirmée après trois analyses positives consécutives ; l'événement est résolu après 3 secondes sans confirmation. Ces réglages sont mesurés et ajustés sur le portable réel.
 
@@ -216,15 +218,11 @@ Le modèle est téléchargé avant l'essai hors ligne. Les images périmées ne 
 
 Isolation Forest remplace Random Forest. Il recherche des combinaisons inhabituelles ; il ne prédit pas une date de panne et ne diagnostique pas automatiquement une fuite de gaz.
 
-Une observation est calculée toutes les 2 secondes sur une fenêtre glissante de 30 secondes : dernières valeurs valides de température, humidité et gaz, variations de température et gaz, moyenne et dispersion du gaz. Le PIR reste hors du premier modèle pour ne pas confondre une visite normale avec une anomalie environnementale. Les mesures périmées, de chauffe ou rejouées ne participent pas à l'inférence en direct.
+Le modèle est absent au premier lancement. L'opérateur collecte 30 secondes de mesures physiques normales à 1 Hz puis lance manuellement la calibration depuis le dashboard. L'API protégée par session et CSRF utilise uniquement les 30 dernières secondes reçues, pour un même appareil et démarrage. Elle refuse données invalides, rejouées, anciennes et interruptions.
 
-Le modèle initial utilise 100 arbres et une graine aléatoire fixée. Il est entraîné hors ligne sur des séquences normales représentatives ; un objectif de collecte de 20 minutes est fixé, sans prétendre que cela garantit la qualité. Une séquence normale distincte sert à fixer le seuil, puis des séquences de test distinctes servent à mesurer fausses alertes et détections. La séparation se fait par séquences temporelles, pas par tirage aléatoire de fenêtres voisines.
+Chaque mesure valide produit une observation température, humidité et gaz. Le PIR est exclu. Isolation Forest utilise 100 arbres, graine 42, et un seuil au quantile 99,5 % des scores de la collecte. Le score `-score_samples(X)` est calculé toutes les deux mesures : trois dépassements ouvrent l'alerte, dix observations normales la résolvent. Une donnée invalide conserve l'incident actif.
 
-L'indicateur affiché est `anomaly_score = -score_samples(X)` : une valeur plus élevée est plus inhabituelle. Le seuil du projet est réglé sur la validation ; une alerte exige trois observations successives au-delà du seuil, puis dix observations normales pour être résolue. Ce score n'est ni une probabilité ni un pourcentage de confiance. [Référence scikit-learn](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.IsolationForest.html).
-
-Si la fenêtre n'est pas suffisamment remplie, si un capteur requis est invalide ou si le modèle est absent, afficher `initializing` ou `unavailable`, jamais « normal ». Le modèle figé et ses paramètres sont versionnés comme artefacts ; aucun réentraînement automatique pendant la démonstration.
-
-Un simulateur Python rejoue des séquences normales et des dérives progressives sous un identifiant `simulator-01`. Les données portent `source: simulated`, utilisent des droits dédiés et apparaissent avec un bandeau « SIMULATION ». Elles sont séparées des mesures physiques, ne pilotent pas les actionneurs réels et ne constituent pas une preuve de performance sur de vrais incidents. Les tests physiques restent nécessaires ; la simulation complète ces tests.
+Le bouton « Réentraîner sur les 30 dernières secondes » remplace le modèle manuellement, sans bloquer l'ingestion. La sauvegarde est atomique et persistante dans un volume Docker. Une erreur conserve le précédent modèle. Aucun entraînement automatique ni artefact synthétique n'est fourni. Cette référence de 30 secondes n'a pas de validation indépendante et ne garantit pas une performance de détection ; le score n'est pas une probabilité.
 
 ## 10. Dashboard
 
@@ -246,7 +244,7 @@ Un compte opérateur local suffit. Son mot de passe est haché ; la session util
 
 Les secrets sont injectés depuis des fichiers locaux exclus de Git ; seul un exemple sans valeurs sensibles est livré. Les certificats publics ne sont pas des secrets. Le pare-feu Windows et les publications Docker sont contrôlés depuis un autre poste pour vérifier les accès réellement autorisés.
 
-Les services tournent avec des privilèges réduits ; aucun montage du socket Docker ni mode `privileged`. Le service vision utilise les permissions caméra de Windows. SSH, s'il est activé, utilise des clés. Les audits portent uniquement sur les cibles et fenêtres autorisées par les encadrants ; le réseau du campus hors périmètre n'est pas une cible.
+Les services tournent avec des privilèges réduits ; aucun montage du socket Docker ni mode `privileged`. Le service vision utilise un périphérique USB autorisé sous Linux ou un flux local de la webcam sous Docker Desktop. SSH, s'il est activé, utilise des clés. Les audits portent uniquement sur les cibles et fenêtres autorisées par les encadrants ; le réseau du campus hors périmètre n'est pas une cible.
 
 ## 12. Pannes, reprise et supervision
 
@@ -265,7 +263,7 @@ Les codes stables sont `E001` appareil hors ligne, `E002` capteur invalide, `E00
 
 Compose prévoit `restart: unless-stopped`, des healthchecks et des dépendances prêtes au lancement. Les clients implémentent aussi leurs propres réessais : l'ordre initial ne garantit pas la disponibilité future. Un conteneur `unhealthy` n'est pas automatiquement redémarré par cette seule politique ; les erreurs fatales doivent provoquer une sortie ou une récupération explicite. [Démarrage Compose](https://docs.docker.com/compose/how-tos/startup-order/).
 
-Sur Windows, le démarrage de Docker Desktop, du service vision Python et du point d'accès Wi-Fi doit être configuré et vérifié, en précisant si l'ouverture de session est nécessaire. La politique de redémarrage Compose ne couvre pas le service vision exécuté sur Windows : sa relance doit être gérée séparément. La veille du portable est désactivée pendant la démonstration. Un redémarrage complet est testé. Les journaux Docker sont bornés, par exemple trois fichiers de 10 Mo par service.
+Sur Windows, configurer le démarrage de Docker Desktop et du point d’accès Wi-Fi. `start.ps1` prépare l'unique venv Python 3.12.11 avec uv, puis démarre les cinq conteneurs et la capture USB automatique ; son terminal reste ouvert pendant la capture. Ctrl+C arrête la capture et les conteneurs, sans effacer les volumes. La capture utilise Media Foundation sans transformations matérielles, avec DirectShow en secours ; les appels pilotes bloqués sont interrompus dans un processus séparé. Un second lancement du même système est refusé. Les cinq services ont une politique de redémarrage Compose. Vérifier le démarrage complet sur la machine finale et désactiver la veille pendant la démonstration. Les journaux Docker sont bornés à trois fichiers de 10 Mo.
 
 ## 13. Recette : preuves attendues
 
@@ -278,7 +276,7 @@ Les critères suivants doivent être testés sur la machine finale ; ils ne sont
 5. Couper le Wi-Fi au-delà de la capacité du tampon : pertes explicitement comptées. Redémarrer l'ESP : nouveau `boot_id`, aucune ancienne commande appliquée.
 6. Débrancher un capteur : erreur et valeur invalide visibles sans arrêt des autres mesures.
 7. Présenter une personne puis quitter le champ : rectangle, événement confirmé et résolution ; relever les latences de vision et leur conformité à l'exigence du sujet.
-8. Rejouer des séquences réservées aux tests : observer le score Isolation Forest, les fausses alertes et les anomalies ; source simulée clairement affichée.
+8. Après 30 secondes de collecte physique normale, utiliser le bouton de réentraînement et vérifier la persistance du modèle au redémarrage ainsi que le refus d’une collecte incomplète.
 9. Arrêter successivement vision, broker, backend et base : état dégradé observable et reprise vérifiée, sans annoncer un succès de stockage ou de commande non confirmé.
 10. Redémarrer le portable : services et hotspot disponibles sans relance manuelle ; historique conservé.
 11. Tester avec un client non authentifié : refus MQTT et commandes web. Avec une clé broker incorrecte : refus par l'ESP. Capturer le trafic : mesures et commandes applicatives illisibles sur le Wi-Fi.
@@ -290,7 +288,7 @@ Le prototype inclut un boîtier accessible pour maintenance, OLED visible, circu
 
 La vidéo utilise le fond vert, choix retenu pour respecter la formulation la plus exigeante du sujet. La soutenance locale suit son déroulé détaillé : 1 minute d'introduction, 1 minute de vidéo, 3 minutes de démonstration, puis 5 minutes de présentation et questions. Le sujet présente quelques formulations divergentes ; les adaptations locales des encadrants priment.
 
-La solution ne comprend pas de cloud, reconnaissance faciale, application mobile, Kubernetes, stockage vidéo continu, apprentissage automatique permanent ou diagnostic industriel certifié. Les scénarios simulés restent identifiables. L'objectif de recette est un système intégré, observable, reproductible et capable de reprendre après les pannes prévues.
+La solution ne comprend pas de cloud, reconnaissance faciale, application mobile, Kubernetes, stockage vidéo continu, apprentissage automatique permanent ou diagnostic industriel certifié. L'objectif de recette est un système intégré, observable, reproductible et capable de reprendre après les pannes prévues.
 
 ## 15. Références
 

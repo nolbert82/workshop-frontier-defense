@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[2]
 @dataclass
 class Settings:
     database_url: str = "sqlite:///./data/sentinel.db"
-    simulation: bool = True
     secure_cookies: bool = True
     origins: tuple[str, ...] = ("https://localhost",)
     password_hash: str = ""
@@ -31,7 +30,7 @@ class Settings:
         for name in cls.__dataclass_fields__:
             env = os.getenv("SENTINEL_" + name.upper())
             if env is not None:
-                if name in ("simulation", "secure_cookies"):
+                if name == "secure_cookies":
                     values[name] = env.lower() == "true"
                 elif name == "mqtt_port":
                     values[name] = int(env)
@@ -39,6 +38,7 @@ class Settings:
                     values[name] = env.split(",")
                 else:
                     values[name] = env
+        values.pop("simulation", None)  # Compatibility with existing private configuration.
         settings = cls(**values)
         if not settings.password_hash or not settings.vision_token:
             raise RuntimeError("Configuration absente : exécuter scripts/setup.py.")

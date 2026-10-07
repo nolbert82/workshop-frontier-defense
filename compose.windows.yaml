@@ -1,0 +1,7 @@
+# Windows capture sends frames to a loopback-only authenticated endpoint.
+services:
+  vision:
+    environment:
+      VISION_SOURCE: bridge
+    ports:
+      - "127.0.0.1:8090:8090"
