@@ -3,7 +3,6 @@ import argparse
 from collections import deque
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 import statistics
@@ -64,7 +63,6 @@ class Vision:
         self.model_ok = False
         self.latencies = deque(maxlen=300)
         self.events = deque()
-        self.scenario = "normal"
         self.tracker = PresenceTracker()
         self.threads = []
         self.stream_id = uuid.uuid4().hex
@@ -75,7 +73,7 @@ class Vision:
             while not self.stop.is_set():
                 if camera is None:
                     try:
-                        selected = camera_index(self.args.camera, self.args.camera_name)
+                        selected = self.args.source or camera_index(self.args.camera, self.args.camera_name)
                     except (RuntimeError, ImportError):
                         self.camera_ok = False
                         log.warning("Webcam configurée indisponible", exc_info=True)
@@ -184,12 +182,13 @@ class Vision:
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--source", default=os.getenv("VISION_SOURCE"), help="URL du flux webcam ou périphérique /dev/video0")
     parser.add_argument("--camera", type=int, default=None)
     parser.add_argument("--camera-name", default=None)
     parser.add_argument("--camera-config", default="vision/camera.json")
     parser.add_argument("--model", default="vision/model/yolo26n.pt")
     parser.add_argument("--imgsz", type=int, default=320)
-    parser.add_argument("--url", default="https://localhost")
+    parser.add_argument("--url", default=os.getenv("VISION_BACKEND_URL", "https://localhost"))
     parser.add_argument("--ca", default="secrets/ca.crt")
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8090)
@@ -199,9 +198,8 @@ def main():
     if args.camera is None:
         args.camera = camera_settings.get("index", 0)
         args.camera_name = args.camera_name or camera_settings.get("name")
-    Path("data").mkdir(exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[RotatingFileHandler("data/vision.log", maxBytes=10*1024*1024, backupCount=3, encoding="utf-8")])
+        handlers=[logging.StreamHandler()])
     logging.getLogger("httpx").setLevel(logging.WARNING)
     token = json.loads(Path(args.config).read_text(encoding="utf-8"))["vision_token"]
     vision = Vision(args, token)

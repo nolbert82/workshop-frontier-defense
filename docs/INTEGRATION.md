@@ -35,7 +35,7 @@ Un message par seconde. DHT22 toutes les deux secondes ; conserver sa dernière 
 
 Le firmware retire une mesure de son tampon uniquement après ce reçu. Un doublon déjà stocké reçoit `duplicate:true`, sans deuxième insertion. Aucun reçu n'est envoyé si la transaction échoue. Les messages rejoués doivent porter **`replayed:true`**, surtout quand l'heure UTC est inconnue. Ils alimentent l'historique sans rafraîchir le direct ni déclencher d'alerte. Le serveur identifie aussi les séquences plus anciennes du même démarrage et les dates de capture périmées.
 
-Le tampon RAM de 60 mesures, la reprise priorisant les nouvelles acquisitions, le débit de rejeu et le compteur de pertes sont à implémenter dans le firmware. La simulation intégrée ne prétend pas émuler une coupure radio réelle avec tampon TLS.
+Le tampon RAM de 60 mesures, la reprise priorisant les nouvelles acquisitions, le débit de rejeu et le compteur de pertes sont à implémenter dans le firmware.
 
 ## Commandes et accusés
 
@@ -53,7 +53,7 @@ Types `buzzer` ou `led`. Valeur booléenne explicite, durée entre 100 et 10000 
 
 ## API vision
 
-Le service utilise `Authorization: Bearer VISION_SECRET`. Droits limités à `POST /api/v1/alerts`, `POST /api/v1/vision/heartbeat`, et à la lecture du scénario fictif quand la simulation est activée. Il n'a accès ni aux sessions opérateur, ni à la base, ni à l'API de commande.
+Le service utilise `Authorization: Bearer VISION_SECRET`. Droits limités à `POST /api/v1/alerts`, `POST /api/v1/vision/heartbeat`. Il n'a accès ni aux sessions opérateur, ni à la base, ni à l'API de commande.
 
 ```json
 {"event_id":"UUID-stable-pour-un-episode","type":"intrusion","state":"active","source":"vision","message":"Personne détectée dans la zone surveillée"}
@@ -61,6 +61,8 @@ Le service utilise `Authorization: Bearer VISION_SECRET`. Droits limités à `PO
 
 Pour résoudre : même identifiant et `state: resolved`. Les réessais sont idempotents, même après redémarrage du backend. Le heartbeat toutes les secondes indique `camera`, `model`, `median_ms`, `p95_ms` et `stream_id`. MJPEG local : `/stream`, secret Bearer requis. FastAPI vérifie la session avant le relais, Nginx publie `/api/v1/video` en HTTPS.
 
-## Séparation des sources
+## Sources et calibration
 
-Les commandes et alertes de `simulator-01` restent virtuelles. Une intrusion `source: vision` peut demander un buzzer physique uniquement si l'appareil physique est connecté et MQTT disponible. Une intrusion `source: simulated` vise toujours `simulator-01`. Les incidents sont acquittés et résolus séparément ; l'acquittement ne fait pas disparaître une condition encore active.
+Seules les télémétries `source: physical` et les événements `source: vision` sont acceptés. Une intrusion peut demander un buzzer physique si l'appareil est connecté et MQTT disponible.
+
+`POST /api/v1/model/retrain` exige une session opérateur, un jeton CSRF et une origine autorisée. Aucun corps n'est nécessaire. Le backend calibre sur les 30 dernières secondes physiques du boîtier configuré. Réponse 200 : métadonnées, seuil, nombre de mesures et date de calibration ; 409 : collecte insuffisante/invalide, appareil hors ligne ou calibration en cours. Aucun accès à cet endpoint avec le secret vision.

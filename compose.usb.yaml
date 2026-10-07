@@ -1,0 +1,9 @@
+# Linux : adapter VISION_DEVICE et VISION_GID au périphérique webcam.
+services:
+  vision:
+    environment:
+      VISION_SOURCE: /dev/video0
+    devices:
+      - "${VISION_DEVICE:-/dev/video0}:/dev/video0"
+    group_add:
+      - "${VISION_GID:-44}"

@@ -1,16 +1,8 @@
-from collections import deque
 from pathlib import Path
 import joblib
-import numpy as np
 
 
-FEATURES = ["temperature", "humidity", "gas", "delta_temperature", "delta_gas", "mean_gas", "std_gas"]
-
-
-def features(rows):
-    gas = np.array([r["gas"] for r in rows], dtype=float)
-    return [rows[-1]["temperature"], rows[-1]["humidity"], gas[-1],
-            rows[-1]["temperature"]-rows[0]["temperature"], gas[-1]-gas[0], gas.mean(), gas.std()]
+from backend.ml.train import FEATURES, features, valid
 
 
 class Anomaly:
@@ -21,31 +13,30 @@ class Anomaly:
             import logging
             logging.getLogger(__name__).exception("Modèle illisible : analyse indisponible")
             self.artifact = None
-        self.windows = {}
+        if self.artifact and (self.artifact.get("training_source") != "physical" or self.artifact.get("features") != FEATURES):
+            self.artifact = None
         self.states = {}
+
+    def install(self, artifact):
+        self.artifact = artifact
+        for state in self.states.values():
+            state.update(state="initializing", score=None, positive=0, negative=0, last_sequence=-2)
 
     def evaluate(self, row):
         device = row["device_id"]
-        window = self.windows.setdefault(device, deque(maxlen=30))
-        state = self.states.setdefault(device, {"state": "initializing", "score": None, "positive": 0, "negative": 0, "active": False, "last_sequence": -2, "boot_id": row["boot_id"]})
+        state = self.states.setdefault(device, {"state": "initializing", "score": None, "positive": 0, "negative": 0, "active": False, "last_sequence": -2, "boot_id": row["boot_id"], "uptime_ms": 0})
         if state["boot_id"] != row["boot_id"]:
-            window.clear()
             state.update(boot_id=row["boot_id"], last_sequence=-2, positive=0, negative=0)
-        if window and (row["uptime_ms"]-window[-1]["uptime_ms"] > 2000):
-            window.clear()
+        if row["uptime_ms"]-state["uptime_ms"] > 2000:
             state.update(positive=0, negative=0)
-        valid = all(row[k] is not None for k in ("temperature", "humidity", "gas")) and all(row["sensor_status"][k] == "ok" for k in ("dht22", "mq2")) and row["sensor_age_ms"]["dht22"] <= 6000 and row["sensor_age_ms"]["mq2"] <= 2000
-        if not valid:
-            window.clear()
+        state["uptime_ms"] = row["uptime_ms"]
+        if not valid(row):
             state.update(state="unavailable", score=None, positive=0, negative=0)
             return dict(state)
-        window.append(row)
-        if not self.artifact:
+        if not self.artifact or self.artifact["device_id"] != device:
             state.update(state="unavailable", score=None)
-        elif len(window) < 30 or window[-1]["uptime_ms"]-window[0]["uptime_ms"] < 29000:
-            state.update(state="initializing", score=None)
         elif row["sequence"]-state["last_sequence"] >= 2:
-            score = float(-self.artifact["model"].score_samples([features(list(window))])[0])
+            score = float(-self.artifact["model"].score_samples([features(row)])[0])
             unusual = score > self.artifact["threshold"]
             state["positive"] = state["positive"]+1 if unusual else 0
             state["negative"] = 0 if unusual else state["negative"]+1

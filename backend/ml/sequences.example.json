@@ -1,9 +1,0 @@
-{
-  "source": "physical",
-  "sequences": {
-    "train": ["data/normal-train.jsonl"],
-    "validation": ["data/normal-validation.jsonl"],
-    "test_normal": ["data/normal-test.jsonl"],
-    "test_drift": ["data/drift-test.jsonl"]
-  }
-}

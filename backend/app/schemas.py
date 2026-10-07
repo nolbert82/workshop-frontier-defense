@@ -31,7 +31,7 @@ class Telemetry(StrictModel):
     presence: bool | None = None
     sensor_age_ms: Ages
     sensor_status: SensorStates
-    source: Literal["physical", "simulated"]
+    source: Literal["physical"]
     replayed: bool = False
     lost_count: int = Field(default=0, ge=0)
 
@@ -67,7 +67,7 @@ class VisionEvent(StrictModel):
     event_id: str = Field(pattern=r"^[a-zA-Z0-9-]{1,80}$")
     type: Literal["intrusion"] = "intrusion"
     state: Literal["active", "resolved"]
-    source: Literal["vision", "simulated"] = "vision"
+    source: Literal["vision"] = "vision"
     message: str = Field(default="Personne détectée dans la zone surveillée", max_length=300)
 
 
@@ -82,7 +82,3 @@ class Heartbeat(StrictModel):
 class Login(StrictModel):
     username: str = Field(max_length=80)
     password: str = Field(max_length=256)
-
-
-class Scenario(StrictModel):
-    scenario: Literal["normal", "drift", "intrusion", "sensor_error", "offline", "command_timeout"]

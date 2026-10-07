@@ -6,7 +6,6 @@ export { default as ChevronRight } from 'lucide-react/dist/esm/icons/chevron-rig
 export { default as Cpu } from 'lucide-react/dist/esm/icons/cpu.js';
 export { default as Download } from 'lucide-react/dist/esm/icons/download.js';
 export { default as Eye } from 'lucide-react/dist/esm/icons/eye.js';
-export { default as FlaskConical } from 'lucide-react/dist/esm/icons/flask-conical.js';
 export { default as Gauge } from 'lucide-react/dist/esm/icons/gauge.js';
 export { default as Lightbulb } from 'lucide-react/dist/esm/icons/lightbulb.js';
 export { default as LogOut } from 'lucide-react/dist/esm/icons/log-out.js';

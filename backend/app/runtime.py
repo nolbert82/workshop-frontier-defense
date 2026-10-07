@@ -3,13 +3,13 @@ import logging
 import json
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import SQLAlchemyError
 from backend.app.mqtt import MQTTBridge
 from backend.app.schemas import Ack, Telemetry
 from backend.app.store import utcnow
 from backend.ml.anomaly import Anomaly
-from simulator.signals import telemetry
+from backend.ml.train import train
 
 log = logging.getLogger(__name__)
 
@@ -25,14 +25,10 @@ class Runtime:
         self.pending = {}
         self.recent_commands = {}
         self.database = False
-        self.scenario = "normal"
-        self.scenario_at = time.monotonic()
-        self.boot = uuid.uuid4().hex[:12]
-        self.sequence = 0
+        self.training_lock = asyncio.Lock()
         self.vision_at = 0
         self.vision = {"camera": False, "model": False}
         self.actuators = {"buzzer": False, "led": False}
-        self.expirations = {}
         self.cooldowns = {}
         self.database_failed = False
         self.tasks = []
@@ -119,7 +115,7 @@ class Runtime:
     async def signal(self, type_, source):
         now = time.monotonic()
         key = (type_, source)
-        device = "simulator-01" if source == "simulated" else self.settings.physical_device
+        device = self.settings.physical_device
         if now-self.cooldowns.get(key, -100) >= 30 and self.online(device):
             self.cooldowns[key] = now
             await self.command({"device_id": device, "type": "buzzer", "value": True, "duration_ms": 3000})
@@ -148,11 +144,9 @@ class Runtime:
 
     async def command(self, request):
         device = request["device_id"]
-        if device not in ("simulator-01", self.settings.physical_device) or not self.online(device):
+        if device != self.settings.physical_device or not self.online(device):
             raise ValueError("Appareil hors ligne : commande indisponible")
-        if device == "simulator-01" and not self.settings.simulation:
-            raise ValueError("Simulation désactivée")
-        if device != "simulator-01" and not self.mqtt.connected:
+        if not self.mqtt.connected:
             raise ValueError("MQTT indisponible")
         latest = self.devices[device]["latest"]
         age = int((time.monotonic()-self.devices[device]["seen"])*1000)
@@ -163,11 +157,10 @@ class Runtime:
         await self.db("put", "commands", id_, data)
         self.track_command(data)
         self.pending[id_] = {"data": data, "sent": time.monotonic()}
-        if device != "simulator-01":
-            payload = {k: data[k] for k in ("command_id", "target_boot_id", "expires_at_uptime_ms", "type", "value", "duration_ms")}
-            if not self.mqtt.publish(device, "commands", payload):
-                # No false acknowledgement; absence of ACK will lead to timeout.
-                log.warning("Commande persistée mais publication MQTT indisponible")
+        payload = {k: data[k] for k in ("command_id", "target_boot_id", "expires_at_uptime_ms", "type", "value", "duration_ms")}
+        if not self.mqtt.publish(device, "commands", payload):
+            # No false acknowledgement; absence of ACK will lead to timeout.
+            log.warning("Commande persistée mais publication MQTT indisponible")
         return data
 
     def track_command(self, data):
@@ -211,24 +204,37 @@ class Runtime:
         overall = "critical" if any(a["severity"] == "critical" for a in active) else "warning" if active else "normal"
         if not self.database:
             overall = "offline"
-        return {"server_time": utcnow(), "overall": overall, "simulation": self.settings.simulation, "scenario": self.scenario,
+        return {"server_time": utcnow(), "overall": overall,
             "devices": devices, "database": self.database, "mqtt": "connected" if self.mqtt.connected else "offline" if self.settings.mqtt_host else "disabled",
             "vision": {**self.vision, "online": vision_online}, "model": bool(self.anomaly.artifact),
             "actuators": {**self.actuators, "system_led": "red" if overall == "critical" else "orange" if overall in ("warning", "offline") else "green"},
             "active_alerts": active, "pending_commands": [p["data"] for p in self.pending.values()],
             "recent_commands": list(reversed(self.recent_commands.values()))}
 
+    async def retrain(self):
+        if self.training_lock.locked():
+            raise ValueError("Un réentraînement est déjà en cours.")
+        async with self.training_lock:
+            async with self.lock:
+                if not self.online(self.settings.physical_device):
+                    raise ValueError("Appareil hors ligne : réentraînement indisponible.")
+                now = datetime.now(timezone.utc)
+                rows = await self.db("list_rows", "measurements", 1000, 0, self.settings.physical_device,
+                                     (now-timedelta(seconds=30)).isoformat())
+            artifact = await asyncio.to_thread(train, rows, self.settings.model_path, now)
+            async with self.lock:
+                self.anomaly.install(artifact)
+                for device in self.devices.values():
+                    device["latest"]["anomaly"] = {"state": "initializing", "score": None,
+                        "threshold": artifact["threshold"], "training_source": "physical"}
+                await self.condition("system:E007", False, "error", "warning", "E007", "Modèle disponible", "backend")
+            return {k: v for k, v in artifact.items() if k != "model"}
+
     async def run(self):
         while True:
             started = time.monotonic()
             try:
                 await self.db("ping")
-                if self.settings.simulation:
-                    self.sequence += 1
-                    if self.scenario != "offline":
-                        await self.ingest(telemetry(self.sequence, self.boot, self.scenario, started-self.scenario_at), "simulator-01", "simulated")
-                    async with self.lock:
-                        await self.condition("simulation:intrusion", self.scenario == "intrusion", "intrusion", "critical", None, "Présence fictive détectée dans la zone surveillée", "simulated")
                 async with self.lock:
                     if self.database_failed:
                         await self.condition("system:E006", True, "error", "critical", "E006", "Base précédemment indisponible ; connexion rétablie", "backend")
@@ -237,27 +243,17 @@ class Runtime:
                     for id_, pending in list(self.pending.items()):
                         data = pending["data"]
                         elapsed = time.monotonic()-pending["sent"]
-                        if data["source"] == "simulated" and self.scenario not in ("command_timeout", "offline") and elapsed >= .3:
-                            rejected = data["target_boot_id"] != self.boot
-                            await self.ack(Ack(command_id=id_, boot_id=data["target_boot_id"], result="rejected" if rejected else "executed", reason="Autre démarrage" if rejected else None), data["device_id"])
-                            if not rejected:
-                                self.actuators[data["type"]] = data["value"]
-                                self.expirations[data["type"]] = time.monotonic()+data["duration_ms"]/1000
-                        elif elapsed >= 5:
+                        if elapsed >= 5:
                             updated = {**data, "status": "timeout", "reason": "Aucun accusé reçu ; exécution réelle inconnue"}
                             await self.db("put", "commands", id_, updated)
                             self.track_command(updated)
                             self.pending.pop(id_, None)
                             await self.condition(id_+":E008", True, "error", "warning", "E008", updated["reason"], data["source"])
-                    for name, deadline in list(self.expirations.items()):
-                        if time.monotonic() >= deadline:
-                            self.actuators[name] = False
-                            self.expirations.pop(name)
-                    expected = ["simulator-01"] if self.settings.simulation else []
+                    expected = []
                     if self.settings.mqtt_host:
                         expected.append(self.settings.physical_device)
                     for device in expected:
-                        await self.condition(device+":E001", not self.online(device), "error", "critical", "E001", f"{device} déconnecté — aucune mesure récente", "simulated" if device == "simulator-01" else "physical")
+                        await self.condition(device+":E001", not self.online(device), "error", "critical", "E001", f"{device} déconnecté — aucune mesure récente", "physical")
                     await self.condition("system:E003", bool(self.settings.mqtt_host) and not self.mqtt.connected, "error", "warning", "E003", "Broker MQTT indisponible", "backend")
                     await self.condition("system:E007", not bool(self.anomaly.artifact), "error", "warning", "E007", "Modèle d'anomalies absent", "backend")
                     await self.condition("system:E005", time.monotonic()-self.vision_at >= 5, "error", "warning", "E005", "Service vision indisponible", "vision")
