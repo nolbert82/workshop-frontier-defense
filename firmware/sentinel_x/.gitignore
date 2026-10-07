@@ -1,0 +1,3 @@
+# Identifiants Wi-Fi / MQTT du boîtier : jamais versionnés
+secrets.h
+build/
