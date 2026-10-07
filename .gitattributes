@@ -1,0 +1,2 @@
+# Linux shell scripts must keep Unix line endings when cloned on Windows.
+*.sh text eol=lf

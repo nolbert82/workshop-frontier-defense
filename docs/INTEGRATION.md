@@ -61,6 +61,8 @@ Le service utilise `Authorization: Bearer VISION_SECRET`. Droits limités à `PO
 
 Pour résoudre : même identifiant et `state: resolved`. Les réessais sont idempotents, même après redémarrage du backend. Le heartbeat toutes les secondes indique `camera`, `model`, `median_ms`, `p95_ms` et `stream_id`. MJPEG local : `/stream`, secret Bearer requis. FastAPI vérifie la session avant le relais, Nginx publie `/api/v1/video` en HTTPS.
 
+Sous Windows, le lanceur ajoute `compose.windows.yaml` et démarre automatiquement `vision.camera_bridge` dans le venv local. La capture envoie au plus cinq images JPEG par seconde à `POST http://127.0.0.1:8090/frames`, avec le même secret Bearer. Le conteneur accepte seulement des images JPEG 640 × 480 de moins de 1 Mo en mode `bridge`, et conserve uniquement la dernière image. Ce port est publié sur loopback uniquement. Une absence d'images depuis deux secondes invalide la caméra. La capture continue de lire la webcam pour éviter d'accumuler un retard vidéo et réessaie après un débranchement.
+
 ## Sources et calibration
 
 Seules les télémétries `source: physical` et les événements `source: vision` sont acceptés. Une intrusion peut demander un buzzer physique si l'appareil est connecté et MQTT disponible.

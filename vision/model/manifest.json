@@ -1,11 +1,11 @@
 {
   "model": "yolo26n.pt",
   "sha256": "9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef",
-  "source": "provided-project-weights",
-  "tested_with": {
+  "source": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt",
+  "container_dependencies": {
     "ultralytics": "8.4.173",
-    "torch": "2.14.1+cpu",
-    "opencv": "5.0.0"
+    "torch": "2.7.1+cpu",
+    "opencv": "4.11.0.86"
   },
-  "validation": "synthetic black frame, zero people; physical latency not validated"
+  "validation": "Official download and SHA-256 verified; container inference and physical camera latency require validation on the target machine"
 }

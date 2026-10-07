@@ -77,7 +77,6 @@ services:
       VISION_SOURCE: ${VISION_SOURCE:-}
     volumes:
       - ./secrets/app.json:/run/secrets/app.json:ro
-      - ./vision/model:/app/vision/model:ro
     extra_hosts: ["host.docker.internal:host-gateway"]
     networks: [app]
     depends_on:

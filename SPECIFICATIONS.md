@@ -29,7 +29,7 @@ Le périmètre est un boîtier, une webcam, un serveur et quelques navigateurs l
 
 PostgreSQL est conservé pour son service dédié et sa persistance dans Compose. SQLite aurait aussi suffi à ce volume avec une seule API : la séparation des services ne rend pas PostgreSQL indispensable. Ni le navigateur ni le service vision n'accèdent directement à la base.
 
-Les cinq services tournent dans Compose. La webcam USB est transmise directement sous Linux ; sous Docker Desktop, un flux local provenant de cette webcam fournit les images au conteneur vision. Un seul environnement Python local `.venv` sert aux outils et tests.
+Les cinq services tournent dans Compose. La webcam USB est transmise directement sous Linux. Sous Windows, le lanceur démarre automatiquement une capture USB dans `.venv`, qui envoie les images au conteneur vision via un endpoint local authentifié. Aucune URL de caméra n'est à configurer. YOLO reste dans Docker ; ses poids officiels sont téléchargés et vérifiés à la construction de l'image. Un seul environnement Python local `.venv`, créé avec uv et Python 3.12.11, sert à la capture, aux outils et tests.
 
 ## 3. Architecture et réseau
 
@@ -46,6 +46,7 @@ flowchart LR
     subgraph PC["NOTRE PC PORTABLE — Windows"]
         WIFI["Point d'accès Wi-Fi local"]
         LOCAL["Navigateur local exécutant React"]
+        CAP["Capture USB Windows<br/>Python .venv — sans IA"]
 
         subgraph DOCKER["Docker Desktop / Compose — 5 conteneurs"]
             V["vision<br/>OpenCV + YOLO26-n"]
@@ -68,7 +69,8 @@ flowchart LR
 
     E <-->|Wi-Fi local — MQTTS| WIFI
     U <-->|Wi-Fi local — HTTPS / WSS| WIFI
-    CAM -->|USB Linux ou flux local depuis la webcam| V
+    CAM -->|USB Windows| CAP
+    CAP -->|JPEG + secret via 127.0.0.1:8090| V
 
     style PC fill:#eaf3ff,stroke:#2563eb,stroke-width:2px
     style DOCKER fill:#f8fafc,stroke:#64748b
@@ -202,7 +204,7 @@ Conservation : toutes les mesures, décisions d'anomalie valides et transitions 
 
 ## 8. Vision locale
 
-Un seul service accède à la webcam USB. Il capture les images, applique YOLO26-n et expose le flux annoté MJPEG. L'API reçoit les événements de présence ; elle ne transporte pas les images via WebSocket.
+Un seul processus accède à la webcam USB : la capture Windows ou le service vision sous Linux. Sous Windows, la capture envoie seulement la dernière image JPEG au conteneur vision, qui applique YOLO26-n et expose le flux annoté MJPEG. Sous Linux, le conteneur capture directement les images USB. L'API reçoit les événements de présence ; elle ne transporte pas les images via WebSocket.
 
 Paramètres initiaux : capture 640 × 480, analyse des images les plus récentes sans file d'attente croissante, modèle `yolo26n.pt`, CPU par défaut, seuil de détection 0,60. Une personne est confirmée après trois analyses positives consécutives ; l'événement est résolu après 3 secondes sans confirmation. Ces réglages sont mesurés et ajustés sur le portable réel.
 
@@ -261,7 +263,7 @@ Les codes stables sont `E001` appareil hors ligne, `E002` capteur invalide, `E00
 
 Compose prévoit `restart: unless-stopped`, des healthchecks et des dépendances prêtes au lancement. Les clients implémentent aussi leurs propres réessais : l'ordre initial ne garantit pas la disponibilité future. Un conteneur `unhealthy` n'est pas automatiquement redémarré par cette seule politique ; les erreurs fatales doivent provoquer une sortie ou une récupération explicite. [Démarrage Compose](https://docs.docker.com/compose/how-tos/startup-order/).
 
-Sur Windows, configurer le démarrage de Docker Desktop, du point d’accès Wi-Fi et de l’outil de capture webcam si nécessaire. Les cinq services ont une politique de redémarrage Compose. Vérifier le démarrage complet sur la machine finale et désactiver la veille pendant la démonstration. Les journaux Docker sont bornés à trois fichiers de 10 Mo.
+Sur Windows, configurer le démarrage de Docker Desktop et du point d’accès Wi-Fi. Le lanceur démarre ensuite les cinq conteneurs et la capture USB automatique ; son terminal reste ouvert pendant la capture. Ctrl+C arrête la capture ; les conteneurs s'arrêtent avec Compose. Les cinq services ont une politique de redémarrage Compose. Vérifier le démarrage complet sur la machine finale et désactiver la veille pendant la démonstration. Les journaux Docker sont bornés à trois fichiers de 10 Mo.
 
 ## 13. Recette : preuves attendues
 

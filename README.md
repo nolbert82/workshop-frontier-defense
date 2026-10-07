@@ -4,18 +4,19 @@ Surveillance locale avec capteurs physiques, FastAPI, React, PostgreSQL, MQTT TL
 
 ## Préparation
 
-Python 3.12 et Docker avec Compose sont nécessaires. Node.js et pnpm sont utiles uniquement pour modifier le frontend. Un seul environnement Python local, `.venv`, sert aux outils et aux tests. Les conteneurs installent leurs propres dépendances.
+uv, Python 3.12.11 et Docker avec Compose sont nécessaires. Node.js et pnpm sont utiles uniquement pour modifier le frontend. Un seul environnement Python local, `.venv`, sert aux outils, aux tests et à la capture USB sous Windows. Les conteneurs installent leurs propres dépendances.
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+uv python install 3.12.11
+uv venv --python 3.12.11 .venv
+uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 .venv\Scripts\python.exe scripts/setup.py --ip 192.168.50.1
 .\scripts\start-docker.ps1
 ```
 
 Choisir l'adresse réelle du serveur avant la première préparation. Les secrets existants ne sont pas écrasés. Le dashboard est à https://localhost ou https://ADRESSE_DU_SERVEUR ; compte `operateur`, mot de passe dans `secrets/operator.txt`. Installer `secrets/ca.crt` comme autorité de confiance sur les postes de consultation. Ne pas partager les clés privées. Seuls 443 (HTTPS) et 8883 (MQTTS) sont publiés.
 
-Les poids `vision/model/yolo26n.pt` doivent être présents avant le lancement. Les dépendances, images et poids se préparent avec Internet ; aucun modèle ne se télécharge au démarrage. Un seul worker backend est utilisé.
+Les poids YOLO26-n sont téléchargés automatiquement depuis la version officielle Ultralytics v8.4.0 lors de la construction de l'image vision. Leur SHA-256 est vérifié et ils sont inclus dans l'image ; aucun fichier `.pt` n'est à copier après un clone. La première préparation nécessite Internet. Le démarrage des images déjà préparées fonctionne hors ligne. Un seul worker backend est utilisé.
 
 ## Vision en conteneur
 
@@ -29,13 +30,13 @@ VISION_DEVICE=/dev/video0 VISION_GID=$(stat -c '%g' /dev/video0) docker compose 
 
 Le périphérique est transmis au conteneur sans mode privilégié. Adapter son chemin et le groupe de permissions. Le sujet exige une webcam USB branchée sur le PC serveur : conserver cette webcam comme source.
 
-Sous Windows ou macOS, Docker Desktop ne transmet pas directement la webcam USB aux conteneurs. Fournir un flux HTTP/MJPEG ou RTSP depuis cette webcam via un outil de capture sur l'hôte, puis ajouter dans `secrets/compose.env`, par exemple :
+Sous Windows, brancher la webcam USB et lancer `scripts/start-docker.ps1`. Le lanceur active automatiquement `compose.windows.yaml`, démarre les conteneurs puis la capture USB depuis le même `.venv`. Aucune URL ni logiciel de capture supplémentaire n'est nécessaire. Garder le terminal ouvert ; Ctrl+C arrête la capture, puis la commande `stop` ci-dessous arrête les conteneurs.
 
-```dotenv
-VISION_SOURCE=http://host.docker.internal:8081/stream
-```
+La capture sélectionne la webcam configurée par nom si elle est présente, sinon l'unique caméra non intégrée détectée. Si plusieurs webcams sont présentes, préciser l'index avec `scripts/start-docker.ps1 -Camera 1`. En cas de débranchement, la capture réessaie automatiquement.
 
-Adapter l'URL au flux réel de l'outil choisi et limiter son accès au réseau Docker. Le traitement IA reste dans le conteneur ; seule l'acquisition webcam se fait sur l'hôte. USB/IP est une autre possibilité qui nécessite une configuration propre à Docker Desktop. [Documentation Docker](https://docs.docker.com/desktop/features/usbip/).
+Windows lit seulement les images USB ; le conteneur effectue la détection YOLO et les annotations. Les images sont envoyées à un endpoint authentifié sur `127.0.0.1:8090`, inaccessible depuis le réseau Wi-Fi. Seule la dernière image est conservée, sans enregistrement. Le relais est nécessaire car [Docker Desktop ne propose pas de passage USB direct](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/general/).
+
+Sous macOS, la capture automatique n'est pas intégrée au lanceur PowerShell. Utiliser une source HTTP/MJPEG ou RTSP réelle avec `VISION_SOURCE` dans `secrets/compose.env`. Sous Windows, ce réglage n'est pas nécessaire et le lanceur privilégie la capture USB locale.
 
 ```powershell
 docker compose --env-file secrets/compose.env ps
@@ -43,7 +44,7 @@ docker compose --env-file secrets/compose.env logs --tail 100 vision
 docker compose --env-file secrets/compose.env stop
 ```
 
-Sur Linux, conserver les deux options `-f` pour toutes les commandes. Les données PostgreSQL et le modèle persistent dans des volumes séparés. `down -v` les efface.
+Sur Linux, conserver les deux options `-f` pour toutes les commandes. Sous Windows, utiliser le lanceur pour les démarrages ; une commande `up` manuelle doit également inclure `-f compose.yaml -f compose.windows.yaml`. Les données PostgreSQL et le modèle d'anomalie persistent dans des volumes séparés. `down -v` les efface.
 
 ## Calibration du modèle d'anomalie
 
