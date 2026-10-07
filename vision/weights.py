@@ -13,6 +13,7 @@ SHA256 = "9b09cc8bf347f0fc8a5f7657480587f25db09b34bf33b0652110fb03a8ad4fef"
 def download(path):
     path = Path(path)
     if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == SHA256:
+        path.chmod(0o644)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".download")
@@ -24,6 +25,8 @@ def download(path):
                 output.write(chunk)
         if digest.hexdigest() != SHA256:
             raise ValueError("Empreinte du modèle YOLO incorrecte : téléchargement refusé.")
+        # The image downloads as root, then runs YOLO as an unprivileged user.
+        Path(temporary).chmod(0o644)
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)

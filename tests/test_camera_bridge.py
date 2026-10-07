@@ -8,7 +8,8 @@ import cv2
 import httpx
 import numpy as np
 import pytest
-from vision.camera_bridge import select_camera
+from vision.camera_bridge import select_camera, capture_frames, USBCapture
+from vision import camera_bridge
 from vision.service import Vision, handler_for
 from vision import weights
 
@@ -46,6 +47,7 @@ def test_usb_frames_require_secret_and_update_only_latest(bridge):
     assert time.monotonic()-vision.latest[1] < 1
     assert client.get("/stream").status_code == 401
     assert client.get("/health", headers=headers).status_code == 200
+    assert client.get("/health", headers=headers).json() == {"alive": True, "camera": True, "model": False}
 
 
 @pytest.mark.parametrize("content,content_type,status", [
@@ -96,6 +98,65 @@ def test_camera_selection_prefers_usb_and_handles_different_machine():
     with pytest.raises(RuntimeError, match="-Camera"):
         select_camera([external, other])
     with pytest.raises(RuntimeError): select_camera([])
+
+
+def test_capture_keeps_native_format_and_releases_device(monkeypatch):
+    released = []
+    class Device:
+        def isOpened(self): return True
+        def read(self): return True, np.zeros((720, 1280, 3), dtype=np.uint8)
+        def release(self): released.append(True)
+    class Stop:
+        stopped = False
+        def is_set(self): return self.stopped
+        def wait(self, seconds): self.stopped = True
+    frames = []
+    monkeypatch.setattr(cv2, "VideoCapture", lambda index, backend: Device())
+    capture_frames(0, cv2.CAP_MSMF, SimpleNamespace(put_nowait=frames.append), Stop())
+    assert frames[0][0].shape == (480, 640, 3)
+    assert released == [True]
+
+
+def test_capture_releases_device_on_driver_error(monkeypatch):
+    released = []
+    class Device:
+        def isOpened(self): return True
+        def read(self): raise cv2.error("driver failed")
+        def release(self): released.append(True)
+    monkeypatch.setattr(cv2, "VideoCapture", lambda index, backend: Device())
+    capture_frames(0, cv2.CAP_MSMF, None, threading.Event())
+    assert released == [True]
+
+
+def test_blocked_driver_is_terminated_and_capture_can_stop(monkeypatch):
+    from queue import Empty
+    capture = USBCapture(None, "USB Camera")
+    stopped = threading.Event()
+    calls = []
+    class Frames:
+        def get(self, timeout): raise Empty
+        def close(self): calls.append("queue closed")
+        def cancel_join_thread(self): pass
+    class Process:
+        alive = True
+        def start(self): pass
+        def is_alive(self): return self.alive
+        def join(self, timeout): pass
+        def terminate(self):
+            calls.append("terminated")
+            self.alive = False
+            capture.stop.set()
+    context = SimpleNamespace(Queue=lambda **kwargs: Frames(), Event=lambda: stopped,
+                              Process=lambda **kwargs: Process())
+    monkeypatch.setattr(camera_bridge.multiprocessing, "get_context", lambda method: context)
+    import cv2_enumerate_cameras
+    monkeypatch.setattr(cv2_enumerate_cameras, "enumerate_cameras",
+                        lambda backend: [SimpleNamespace(index=0, name="USB Camera")])
+    times = iter([0, 46])
+    monkeypatch.setattr(camera_bridge.time, "monotonic", lambda: next(times))
+    capture.capture()
+    assert calls == ["terminated", "queue closed"]
+    assert stopped.is_set() and capture.latest is None
 
 
 def test_pretrained_weights_download_verified_and_cached(tmp_path, monkeypatch):

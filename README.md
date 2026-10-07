@@ -4,17 +4,17 @@ Surveillance locale avec capteurs physiques, FastAPI, React, PostgreSQL, MQTT TL
 
 ## Préparation
 
-uv, Python 3.12.11 et Docker avec Compose sont nécessaires. Node.js et pnpm sont utiles uniquement pour modifier le frontend. Un seul environnement Python local, `.venv`, sert aux outils, aux tests et à la capture USB sous Windows. Les conteneurs installent leurs propres dépendances.
+Sous Windows, installer uv et Docker Desktop, ouvrir Docker Desktop et brancher la webcam USB. Depuis le dossier du projet, une seule commande suffit :
 
 ```powershell
-uv python install 3.12.11
-uv venv --python 3.12.11 .venv
-uv pip install --python .venv\Scripts\python.exe -r requirements.txt
-.venv\Scripts\python.exe scripts/setup.py --ip 192.168.50.1
-.\scripts\start-docker.ps1
+.\start.ps1
 ```
 
-Choisir l'adresse réelle du serveur avant la première préparation. Les secrets existants ne sont pas écrasés. Le dashboard est à https://localhost ou https://ADRESSE_DU_SERVEUR ; compte `operateur`, mot de passe dans `secrets/operator.txt`. Installer `secrets/ca.crt` comme autorité de confiance sur les postes de consultation. Ne pas partager les clés privées. Seuls 443 (HTTPS) et 8883 (MQTTS) sont publiés.
+Le lanceur prépare Python 3.12.11 et l'unique `.venv` avec uv s'ils sont absents, installe les dépendances, prépare les secrets, construit les conteneurs et démarre la webcam. Il n'est pas nécessaire d'activer le venv. Garder ce terminal ouvert ; **Ctrl+C arrête la capture et les conteneurs**, sans effacer les données. Un second lancement simultané est refusé.
+
+Le dashboard est à https://localhost ; compte `operateur`, mot de passe dans `secrets/operator.txt`. L'adresse serveur pour le boîtier est par défaut `192.168.50.1`. Si elle est différente, préparer les certificats avec `scripts/setup.py --ip ADRESSE_DU_SERVEUR` avant le premier lancement, après création du venv. Les secrets existants ne sont pas écrasés. Installer `secrets/ca.crt` comme autorité de confiance sur les postes de consultation. Seuls 443 (HTTPS) et 8883 (MQTTS) sont publiés sur le réseau.
+
+Node.js et pnpm sont utiles uniquement pour modifier le frontend. L'unique `.venv` sert aux outils, aux tests et à la capture USB sous Windows. Les conteneurs installent leurs propres dépendances.
 
 Les poids YOLO26-n sont téléchargés automatiquement depuis la version officielle Ultralytics v8.4.0 lors de la construction de l'image vision. Leur SHA-256 est vérifié et ils sont inclus dans l'image ; aucun fichier `.pt` n'est à copier après un clone. La première préparation nécessite Internet. Le démarrage des images déjà préparées fonctionne hors ligne. Un seul worker backend est utilisé.
 
@@ -30,9 +30,9 @@ VISION_DEVICE=/dev/video0 VISION_GID=$(stat -c '%g' /dev/video0) docker compose 
 
 Le périphérique est transmis au conteneur sans mode privilégié. Adapter son chemin et le groupe de permissions. Le sujet exige une webcam USB branchée sur le PC serveur : conserver cette webcam comme source.
 
-Sous Windows, brancher la webcam USB et lancer `scripts/start-docker.ps1`. Le lanceur active automatiquement `compose.windows.yaml`, démarre les conteneurs puis la capture USB depuis le même `.venv`. Aucune URL ni logiciel de capture supplémentaire n'est nécessaire. Garder le terminal ouvert ; Ctrl+C arrête la capture, puis la commande `stop` ci-dessous arrête les conteneurs.
+Sous Windows, brancher la webcam USB et lancer `start.ps1`. Le lanceur active automatiquement `compose.windows.yaml`, démarre les conteneurs puis la capture USB depuis le même `.venv`. Aucune URL ni logiciel de capture supplémentaire n'est nécessaire.
 
-La capture sélectionne la webcam configurée par nom si elle est présente, sinon l'unique caméra non intégrée détectée. Si plusieurs webcams sont présentes, préciser l'index avec `scripts/start-docker.ps1 -Camera 1`. En cas de débranchement, la capture réessaie automatiquement.
+La capture sélectionne la webcam configurée par nom si elle est présente, sinon l'unique caméra non intégrée détectée. Si plusieurs webcams sont présentes, préciser l'index avec `start.ps1 -Camera 1`. Elle utilise d'abord Media Foundation, sans transformations matérielles, puis DirectShow si nécessaire. Le format vidéo natif est conservé ; une ouverture bloquée est interrompue et retentée. En cas de débranchement, la capture réessaie automatiquement. Le terminal confirme « Webcam active » seulement après réception d'une image. Si les deux pilotes échouent, fermer les autres applications utilisant la caméra et vérifier l'autorisation des applications de bureau dans les paramètres de confidentialité Windows.
 
 Windows lit seulement les images USB ; le conteneur effectue la détection YOLO et les annotations. Les images sont envoyées à un endpoint authentifié sur `127.0.0.1:8090`, inaccessible depuis le réseau Wi-Fi. Seule la dernière image est conservée, sans enregistrement. Le relais est nécessaire car [Docker Desktop ne propose pas de passage USB direct](https://docs.docker.com/desktop/troubleshoot-and-support/faqs/general/).
 

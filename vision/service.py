@@ -236,9 +236,15 @@ def handler_for(vision, token):
                 self.send_error(401)
                 return
             if self.path == "/health":
+                with vision.lock:
+                    status = {"alive": True, "camera": bool(vision.latest and time.monotonic()-vision.latest[1] < 2),
+                              "model": vision.model_ok}
+                content = json.dumps(status).encode()
                 self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(content)))
                 self.end_headers()
-                self.wfile.write(b'{"alive":true}')
+                self.wfile.write(content)
                 return
             if self.path != "/stream":
                 self.send_error(404)
