@@ -17,7 +17,7 @@ Aucun générateur de données ni scénario fictif : toutes les données viennen
 | `firmware/sentinel_x/` | Firmware C++ du boîtier ESP32 ([README dédié](firmware/sentinel_x/README.md)) |
 | `firmware/tests/` | Sketches de test du câblage, un par composant |
 | `scripts/` | Génération des secrets et certificats, secrets du firmware, export du code |
-| `docs/` | Contrat MQTT boîtier / backend ([INTEGRATION.md](docs/INTEGRATION.md)), recette, soutenance |
+| `docs/` | Contrat MQTT boîtier / backend ([INTEGRATION.md](docs/INTEGRATION.md)) et recette sur la machine finale avec mesures relevées ([RECETTE.md](docs/RECETTE.md)) |
 | `tests/` | Tests automatisés Python (`pytest`) |
 | `SPECIFICATIONS.md` | Spécification fonctionnelle et technique |
 
