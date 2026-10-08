@@ -138,6 +138,10 @@ Utiliser `start.ps1` pour démarrer : une commande `up` manuelle doit inclure le
 
 ## Architecture
 
+![Schéma réseau SENTINEL-X](docs/schema-reseau.png)
+
+Source vectorielle : [docs/schema-reseau.svg](docs/schema-reseau.svg). Le schéma d'architecture logicielle détaillé est dans [SPECIFICATIONS.md](SPECIFICATIONS.md) §3.
+
 Seuls les ports 443 (HTTPS : dashboard, API, WebSocket, vidéo) et 8883 (MQTTS) sont publiés sur le réseau. PostgreSQL, FastAPI et le service vision ne sont joignables que sur le réseau interne Docker. Le contrat MQTT (topics, payloads JSON, reçus, commandes) est décrit dans [docs/INTEGRATION.md](docs/INTEGRATION.md) ; TLS, QoS 1, déduplication, reçus de stockage et confirmation des commandes sont implémentés. Un timeout de commande signifie une exécution inconnue. Le service vision ne peut pas envoyer de commande opérateur.
 
 ### Vision
